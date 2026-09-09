@@ -17,4 +17,9 @@ dependencies {
 
 kotlin { jvmToolchain(21) }
 
-tasks.test { useJUnitPlatform() }
+tasks.test {
+    useJUnitPlatform()
+    // The conformance corpus is vendored at the repo root, and Gradle runs
+    // tests with the module directory as the working directory.
+    systemProperty("corpus.dir", rootProject.file("corpus").absolutePath)
+}

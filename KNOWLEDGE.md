@@ -37,3 +37,21 @@ different across the three and are not worth unifying.
 Domain terms are standardized across all three repos. `Timeline` (not
 `BifIndex`), `FrameRef`, `timelineRef`, `itemId`, `subtitleRef`, `scene`
 (not `chunk`). See `PLAN.md` §7, Phase 0.
+
+## Conformance corpus
+
+`corpus/` is **vendored** from `trickplayer-knowledge` — never edit it here.
+Refresh it by running that repo's `tools/corpus/sync-corpus.sh`, which also has
+a `--check` mode that reports drift.
+
+```bash
+. ./env.sh && ./gradlew :core:test
+```
+
+`CorpusConformanceTest` runs alongside the existing `:core` suites and is doing
+a different job from them: the others check that this build does what its
+author intended, while this one checks that it does what the *other two
+platforms* were told to do.
+
+A skipped test there is not a pass. It records a rule this build does not
+implement, with a pointer to where that is tracked.
