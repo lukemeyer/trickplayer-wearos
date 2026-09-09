@@ -1,0 +1,5 @@
+<resources>
+    <string name="app_name">BIF Watchface</string>
+    <string name="complication_frame">BIF Frame</string>
+    <string name="complication_subtitle">BIF Subtitle</string>
+</resources>

@@ -1,0 +1,10 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  Preview is the only required element. Keep this minimal: invented or
+  misspelled elements here stop the package registering as a watch face at all,
+  and the only symptom is set-watchface reporting the package "is not installed".
+-->
+<WatchFaceInfo>
+    <Preview value="@drawable/preview" />
+    <Editable value="true" />
+</WatchFaceInfo>

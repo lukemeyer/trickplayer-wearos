@@ -1,0 +1,126 @@
+<?xml version="1.0" encoding="utf-8"?>
+<manifest xmlns:android="http://schemas.android.com/apk/res/android">
+
+    <uses-feature android:name="android.hardware.type.watch" />
+    <uses-permission android:name="android.permission.INTERNET" />
+    <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE" />
+
+    <application
+        android:allowBackup="true"
+        android:icon="@mipmap/ic_launcher"
+        android:label="@string/app_name"
+        android:supportsRtl="true"
+        android:theme="@android:style/Theme.DeviceDefault">
+
+        <!--
+          The configuration app. Reachable from the launcher, and this is where
+          Plex sign-in lives: a four-character code shown on the watch and typed
+          at plex.tv/link on any other device. No keyboard involved anywhere.
+        -->
+        <activity
+            android:name=".config.ConfigActivity"
+            android:exported="true"
+            android:label="@string/app_name"
+            android:taskAffinity="">
+            <intent-filter>
+                <action android:name="android.intent.action.MAIN" />
+                <category android:name="android.intent.category.LAUNCHER" />
+            </intent-filter>
+        </activity>
+
+        <!--
+          Two data sources, one per complication type.
+
+          A single service could declare both PHOTO_IMAGE and LONG_TEXT, but the
+          watch face binds one slot to one data source: keeping them separate is
+          what lets the frame and the subtitle occupy different slots on the same
+          face. They share state through SceneState, so they always agree about
+          which scene is current.
+        -->
+        <service
+            android:name=".FrameComplicationService"
+            android:exported="true"
+            android:label="@string/complication_frame"
+            android:permission="com.google.android.wearable.permission.BIND_COMPLICATION_PROVIDER">
+            <intent-filter>
+                <action android:name="android.support.wearable.complications.ACTION_COMPLICATION_UPDATE_REQUEST" />
+            </intent-filter>
+            <!--
+              LARGE_IMAGE, not PHOTO_IMAGE. This meta-data takes the LEGACY
+              wearable-support type names; PHOTO_IMAGE is only the AndroidX
+              Kotlin name for the same thing. Get it wrong and nothing
+              complains anywhere — the service simply is never bound and the
+              slot stays empty.
+            -->
+            <meta-data
+                android:name="android.support.wearable.complications.SUPPORTED_TYPES"
+                android:value="LARGE_IMAGE" />
+            <!--
+              This is the glance trigger, and 0 was wrong.
+
+              The system calls onComplicationRequest at roughly this interval
+              *while the watch face is active* — which is to say, while someone
+              is looking at it. At 0 it never polls at all, so the face only ever
+              moved when tapped. Waking the watch does sometimes produce a
+              request on its own, but only sometimes: it happened during the
+              Phase 0 spike, which is what led to the claim that the glance
+              trigger came free, and it did not happen at all on the next
+              measurement. It cannot be relied on.
+
+              300 s is the practical floor; lower values are clamped. Each call
+              is a cache read, and Cursor's dwell gate decides whether it moves.
+            -->
+            <meta-data
+                android:name="android.support.wearable.complications.UPDATE_PERIOD_SECONDS"
+                android:value="300" />
+        </service>
+
+        <service
+            android:name=".SubtitleComplicationService"
+            android:exported="true"
+            android:label="@string/complication_subtitle"
+            android:permission="com.google.android.wearable.permission.BIND_COMPLICATION_PROVIDER">
+            <intent-filter>
+                <action android:name="android.support.wearable.complications.ACTION_COMPLICATION_UPDATE_REQUEST" />
+            </intent-filter>
+            <meta-data
+                android:name="android.support.wearable.complications.SUPPORTED_TYPES"
+                android:value="LONG_TEXT,SHORT_TEXT" />
+            <!-- Matches the frame, so the two never disagree about the scene. -->
+            <meta-data
+                android:name="android.support.wearable.complications.UPDATE_PERIOD_SECONDS"
+                android:value="300" />
+        </service>
+
+        <!-- The tap target. Both complications point their tapAction here. -->
+        <receiver
+            android:name=".AdvanceReceiver"
+            android:exported="true">
+            <intent-filter>
+                <action android:name="com.lukemeyer.bif.app.ADVANCE" />
+            </intent-filter>
+        </receiver>
+
+        <!-- Redraws the face when the prefetch worker lands new scenes. -->
+        <receiver
+            android:name=".ScenesReadyReceiver"
+            android:exported="false">
+            <intent-filter>
+                <action android:name="com.lukemeyer.bif.data.SCENES_READY" />
+            </intent-filter>
+        </receiver>
+
+        <!--
+          Dev only: sets the episode over adb until the on-watch config UI
+          exists (Phase 5). The Pebble project's gitignored local-config.js
+          served the same purpose for the same reason.
+        -->
+        <receiver
+            android:name=".ConfigReceiver"
+            android:exported="true">
+            <intent-filter>
+                <action android:name="com.lukemeyer.bif.app.CONFIGURE" />
+            </intent-filter>
+        </receiver>
+    </application>
+</manifest>

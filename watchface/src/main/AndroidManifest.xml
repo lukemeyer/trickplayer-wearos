@@ -1,0 +1,29 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  Watch Face Format packages declare NO service.
+
+  That is worth stating loudly because the obvious guess is wrong and fails in
+  the worst possible way. Declaring the usual
+  androidx.wear.watchface.control.WatchFaceControlService here builds and
+  installs perfectly happily, and then `set-watchface` answers
+  "Watch face package is not installed" — the system never recognised it as a
+  watch face at all. Discovery is by the format.version property plus
+  res/raw/watchface.xml, and nothing else.
+-->
+<manifest xmlns:android="http://schemas.android.com/apk/res/android">
+
+    <uses-feature android:name="android.hardware.type.watch" />
+
+    <application
+        android:hasCode="false"
+        android:label="@string/watch_face_name">
+
+        <meta-data
+            android:name="com.google.android.wearable.standalone"
+            android:value="true" />
+
+        <property
+            android:name="com.google.wear.watchface.format.version"
+            android:value="2" />
+    </application>
+</manifest>
