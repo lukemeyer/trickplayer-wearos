@@ -69,6 +69,29 @@ class CorpusConformanceTest {
     }
 
     @Test
+    @DisplayName("timeline: a real multiplier, and a file longer than the sentinel says")
+    fun timelineEdgeCases() {
+        // Neither shape occurs in real Plex output, which is precisely why a
+        // parser that hardcodes 1000, or that derives the last frame's length
+        // from the file size, survives on real files. Both bugs are live in
+        // the G2 build today.
+        for (name in listOf("multiplier", "trailing")) {
+            val bytes = File(corpus, "timeline/$name.bif").readBytes()
+            val exp = obj("timeline/$name.expected.json")
+            val header = Timeline.parseHeader(bytes)
+            assertEquals(
+                exp["multiplierMs"]!!.jsonPrimitive.int, header.multiplier, "$name multiplier"
+            )
+            val index = Timeline.parseIndex(bytes, header)
+            exp["frames"]!!.jsonArray.forEachIndexed { i, e ->
+                val f = e.jsonObject
+                assertEquals(f["tsMs"]!!.jsonPrimitive.long, index[i].tsMs, "$name frame $i tsMs")
+                assertEquals(f["length"]!!.jsonPrimitive.int, index[i].length, "$name frame $i length")
+            }
+        }
+    }
+
+    @Test
     @DisplayName("timeline: malformed input is rejected, not silently accepted")
     fun timelineRejects() {
         val bytes = File(corpus, "timeline/synthetic.bif").readBytes()
