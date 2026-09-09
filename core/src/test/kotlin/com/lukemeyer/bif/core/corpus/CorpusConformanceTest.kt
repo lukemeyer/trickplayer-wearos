@@ -150,6 +150,40 @@ class CorpusConformanceTest {
         }
     }
 
+    // ---------------------------------------------------------------- real
+
+    @Test
+    @DisplayName("real: a captured trick-play index from licence-free content")
+    fun realCapture() {
+        val dir = File(corpus, "real")
+        val names = (dir.listFiles() ?: emptyArray())
+            .filter { it.name.endsWith(".expected.json") }
+            .map { it.name.removeSuffix(".expected.json") }
+        // corpus/real/ is a slot and may be empty; degrade cleanly.
+        assumeTrue(
+            names.isNotEmpty(),
+            "corpus/real/ is empty — no real captured fixture yet. See its README.",
+        )
+
+        for (name in names) {
+            val bytes = File(dir, "$name.bif").readBytes()
+            val exp = obj("real/$name.expected.json")
+            val header = Timeline.parseHeader(bytes)
+            // What the encoder actually wrote, rather than what we assume it
+            // writes — the reason to capture a real file at all.
+            assertEquals(
+                exp["multiplierMs"]!!.jsonPrimitive.int, header.multiplier, "$name multiplier"
+            )
+            val index = Timeline.parseIndex(bytes, header)
+            exp["frames"]!!.jsonArray.forEachIndexed { i, e ->
+                val f = e.jsonObject
+                assertEquals(f["tsMs"]!!.jsonPrimitive.long, index[i].tsMs, "$name frame $i tsMs")
+                assertEquals(f["offset"]!!.jsonPrimitive.int, index[i].offset, "$name frame $i offset")
+                assertEquals(f["length"]!!.jsonPrimitive.int, index[i].length, "$name frame $i length")
+            }
+        }
+    }
+
     // --------------------------------------------------------------- scene
 
     @Test
