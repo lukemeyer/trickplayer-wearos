@@ -1,11 +1,11 @@
-# BIF Watchface (Wear OS)
+# Trickplayer watchface (Wear OS)
 
 A Wear OS watch face that shows a frame from a Plex BIF trick-play index plus the
 subtitles from that moment, advancing through an episode as you glance at it.
 
 Third target for this idea, after
-[`plex-bif-viewer`](../plex-bif-viewer) (Even Realities G2 glasses) and
-[`bif-watchface-pebble`](../bif-watchface-pebble) (Pebble Time 2). The *ideas*
+[`trickplayer-g2`](../trickplayer-g2) (Even Realities G2 glasses) and
+[`trickplayer-pebble`](../trickplayer-pebble) (Pebble Time 2). The *ideas*
 are ported; most of the Pebble *code* is not, because it was shaped almost
 entirely by constraints Wear OS does not have.
 
