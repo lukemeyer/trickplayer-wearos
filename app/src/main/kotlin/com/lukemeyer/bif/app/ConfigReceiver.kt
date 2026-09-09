@@ -17,8 +17,8 @@ import com.lukemeyer.bif.data.Settings
  * was.
  *
  *     adb shell am broadcast -a com.lukemeyer.bif.app.CONFIGURE \
- *         --es server https://… --es token … --el partId 27295 \
- *         --es subKey /library/streams/103375
+ *         --es server https://… --es token … --el timelineRef 27295 \
+ *         --es subtitleRef /library/streams/103375
  *
  * A token passed this way is visible to `adb shell dumpsys` and to logcat's
  * broadcast records. That is acceptable on a development emulator and is why it
@@ -32,9 +32,9 @@ class ConfigReceiver : BroadcastReceiver() {
 
         val server = intent.getStringExtra("server")
         val token = intent.getStringExtra("token")
-        val partId = intent.getLongExtra("partId", -1L)
-        if (server.isNullOrEmpty() || token.isNullOrEmpty() || partId < 0) {
-            Log.w(TAG, "need --es server, --es token and --el partId")
+        val timelineRef = intent.getLongExtra("timelineRef", -1L)
+        if (server.isNullOrEmpty() || token.isNullOrEmpty() || timelineRef < 0) {
+            Log.w(TAG, "need --es server, --es token and --el timelineRef")
             return
         }
 
@@ -50,14 +50,14 @@ class ConfigReceiver : BroadcastReceiver() {
             server = server.trimEnd('/'),
             routes = routes,
             token = token,
-            partId = partId,
-            subKey = intent.getStringExtra("subKey").orEmpty(),
+            timelineRef = timelineRef,
+            subtitleRef = intent.getStringExtra("subtitleRef").orEmpty(),
             title = intent.getStringExtra("title").orEmpty(),
             intervalMs = intent.getLongExtra("intervalMs", 10_000L),
             skipSilent = intent.getBooleanExtra("skipSilent", true),
         )
         // Never log the token.
-        Log.i(TAG, "configured part $partId, interval " +
+        Log.i(TAG, "configured part $timelineRef, interval " +
             "${intent.getLongExtra("intervalMs", 10_000L)} ms; starting prefetch")
 
         // Optional tuning knob: --el dwellMs 5000 to watch the raw poll cadence.

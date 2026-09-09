@@ -79,7 +79,7 @@ fun main() {
 
     val show = all.firstOrNull { it.title.contains("Futurama", true) } ?: all.firstOrNull() ?: return
     println("\n== eligibility in \"${show.title}\" ==")
-    val eps = lib.episodes(show.ratingKey)
+    val eps = lib.episodes(show.itemId)
     say("episodes", eps.size.toString())
 
     // Lazily, one at a time — which is the point: this is what a watch can
@@ -89,10 +89,10 @@ fun main() {
     val t1 = System.currentTimeMillis()
     val hits = ArrayList<String>()
     eps.forEach { ep ->
-        val play = lib.playable(ep.ratingKey)
+        val play = lib.playable(ep.itemId)
         if (play != null) {
             usable++
-            if (hits.size < 6) hits.add("      ${ep.subtitle} ${ep.title.take(34)}  part ${play.partId}  subs ${play.subLanguage}")
+            if (hits.size < 6) hits.add("      ${ep.subtitle} ${ep.title.take(34)}  part ${play.timelineRef}  subs ${play.subLanguage}")
         }
     }
     hits.forEach(::println)

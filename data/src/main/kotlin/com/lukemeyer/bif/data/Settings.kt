@@ -32,8 +32,8 @@ class Settings(context: Context) {
          */
         val routes: List<String> = listOf(server),
         val token: String,
-        val partId: Long,
-        val subKey: String,
+        val timelineRef: Long,
+        val subtitleRef: String,
         val title: String,
         val intervalMs: Long,
         val skipSilent: Boolean,
@@ -41,25 +41,25 @@ class Settings(context: Context) {
         /**
          * Identifies the cached encoding. Changing episode or scene granularity
          * changes this, so stale scenes can never be served for the new one —
-         * the same job `cache.setProfile(partId, w, h, depth)` did on Pebble.
+         * the same job `cache.setProfile(timelineRef, w, h, depth)` did on Pebble.
          */
-        val profile: String get() = "$partId.$intervalMs"
+        val profile: String get() = "$timelineRef.$intervalMs"
     }
 
     var episode: Episode?
         get() {
             val server = prefs.getString(K_SERVER, null) ?: return null
             val token = prefs.getString(K_TOKEN, null) ?: return null
-            val partId = prefs.getLong(K_PART, -1L)
-            if (partId < 0) return null
+            val timelineRef = prefs.getLong(K_PART, -1L)
+            if (timelineRef < 0) return null
             return Episode(
                 server = server,
                 token = token,
-                partId = partId,
+                timelineRef = timelineRef,
                 routes = prefs.getString(K_ROUTES, null)
                     ?.split('\n')?.filter { it.isNotBlank() }
                     ?.takeIf { it.isNotEmpty() } ?: listOf(server),
-                subKey = prefs.getString(K_SUBKEY, "").orEmpty(),
+                subtitleRef = prefs.getString(K_SUBKEY, "").orEmpty(),
                 title = prefs.getString(K_TITLE, "").orEmpty(),
                 intervalMs = prefs.getLong(K_INTERVAL, 10_000L),
                 skipSilent = prefs.getBoolean(K_SKIP_SILENT, true),
@@ -73,8 +73,8 @@ class Settings(context: Context) {
                     putString(K_SERVER, v.server)
                     putString(K_ROUTES, v.routes.joinToString("\n"))
                     putString(K_TOKEN, v.token)
-                    putLong(K_PART, v.partId)
-                    putString(K_SUBKEY, v.subKey)
+                    putLong(K_PART, v.timelineRef)
+                    putString(K_SUBKEY, v.subtitleRef)
                     putString(K_TITLE, v.title)
                     putLong(K_INTERVAL, v.intervalMs)
                     putBoolean(K_SKIP_SILENT, v.skipSilent)

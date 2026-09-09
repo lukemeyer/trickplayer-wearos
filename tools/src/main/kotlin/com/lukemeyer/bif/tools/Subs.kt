@@ -40,7 +40,7 @@ fun main() {
         ?: lib.shows(tv.key).first()
     println("show: ${show.title}")
 
-    val eps = lib.episodes(show.ratingKey)
+    val eps = lib.episodes(show.itemId)
     println("episodes: ${eps.size}\n")
 
     var shown = 0
@@ -49,7 +49,7 @@ fun main() {
     var noSubsAtAll = 0
 
     for (ep in eps) {
-        val meta = container("/library/metadata/${ep.ratingKey}").arr("Metadata").firstOrNull() ?: continue
+        val meta = container("/library/metadata/${ep.itemId}").arr("Metadata").firstOrNull() ?: continue
         val part = meta.arr("Media").flatMap { it.arr("Part") }.firstOrNull() ?: continue
         val subs = part.arr("Stream").filter { it["streamType"]?.jsonPrimitive?.intOrNull == 3 }
 
@@ -61,7 +61,7 @@ fun main() {
 
         if (shown < 2) {
             shown++
-            println("=== ${ep.subtitle} ${ep.title} (ratingKey ${ep.ratingKey}) ===")
+            println("=== ${ep.subtitle} ${ep.title} (itemId ${ep.itemId}) ===")
             println("  partId   = ${part.s("id")}")
             println("  indexes  = ${part.s("indexes")}  (sd == has BIF)")
             println("  container= ${part.s("container")}")

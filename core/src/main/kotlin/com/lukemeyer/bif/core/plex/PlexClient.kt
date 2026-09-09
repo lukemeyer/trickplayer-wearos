@@ -114,12 +114,12 @@ class PlexClient(
     }
 
     /** The `sd` trick-play index for a media part. */
-    fun bifUrl(server: String, partId: Long): String =
-        "${server.trimEnd('/')}/library/parts/$partId/indexes/sd"
+    fun timelineUrl(server: String, timelineRef: Long): String =
+        "${server.trimEnd('/')}/library/parts/$timelineRef/indexes/sd"
 
     /** A subtitle sidecar. Only streams with a non-null `key` can be fetched. */
-    fun subtitleUrl(server: String, subKey: String): String =
-        "${server.trimEnd('/')}$subKey"
+    fun subtitleUrl(server: String, subtitleRef: String): String =
+        "${server.trimEnd('/')}$subtitleRef"
 
     companion object {
         /** Shared with PlexDiscovery, which probes the same hosts. */

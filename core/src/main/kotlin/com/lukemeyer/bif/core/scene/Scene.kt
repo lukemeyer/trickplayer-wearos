@@ -1,6 +1,6 @@
 package com.lukemeyer.bif.core.scene
 
-import com.lukemeyer.bif.core.bif.BifIndex
+import com.lukemeyer.bif.core.timeline.Timeline
 import com.lukemeyer.bif.core.subs.Srt
 
 /**
@@ -38,7 +38,7 @@ data class Scene(
  * so it is worth holding whole — it is what makes most advances text-only.
  */
 class Episode(
-    val index: List<BifIndex.Entry>,
+    val index: List<Timeline.FrameRef>,
     val picked: List<Int>,
     val cues: List<Srt.Cue>,
     val intervalMs: Long,

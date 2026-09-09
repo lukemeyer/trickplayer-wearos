@@ -1,6 +1,6 @@
 package com.lukemeyer.bif.tools
 
-import com.lukemeyer.bif.core.bif.BifIndex
+import com.lukemeyer.bif.core.timeline.Timeline
 import com.lukemeyer.bif.core.plex.PlexClient
 import com.lukemeyer.bif.core.scene.Episode
 import com.lukemeyer.bif.core.scene.SceneResolver
@@ -35,9 +35,9 @@ fun main() {
 
     val server = p("plex.server")
     val token = p("plex.token")
-    val partId = p("plex.partId").toLongOrNull()
-    val subKey = p("plex.subKey")
-    if (server.isEmpty() || token.isEmpty() || partId == null) {
+    val timelineRef = p("plex.partId").toLongOrNull()
+    val subtitleRef = p("plex.subKey")
+    if (server.isEmpty() || token.isEmpty() || timelineRef == null) {
         System.err.println("local.properties is missing plex.server / plex.token / plex.partId")
         return
     }
@@ -45,27 +45,27 @@ fun main() {
     // .plex.direct certs are valid but issued for a hashed hostname; allow the
     // direct route since this is a dev harness pointed at the user's own LAN.
     val plex = PlexClient(token, allowInsecureDirect = true)
-    val bifUrl = plex.bifUrl(server, partId)
+    val timelineUrl = plex.timelineUrl(server, timelineRef)
 
     say("server", server.substringAfter("//").substringBefore(':').take(14) + "…")
-    say("part", partId.toString())
+    say("part", timelineRef.toString())
 
     // ---------------------------------------------------------------- index
     val t0 = System.currentTimeMillis()
-    val head = plex.getRange(bifUrl, 0, 63)
-    val header = BifIndex.parseHeader(head)
+    val head = plex.getRange(timelineUrl, 0, 63)
+    val header = Timeline.parseHeader(head)
     say("range supported", plex.rangeSupported.toString())
     say("frames", header.count.toString())
     say("multiplier", "${header.multiplier} ms" +
         if (header.multiplier == 1000) "  (field is 0; 1000 is the spec default)" else "")
     say("index bytes", header.indexBytes.toString())
 
-    val idxBytes = plex.getRange(bifUrl, 0, (header.indexBytes - 1).toLong())
-    val index = BifIndex.parseIndex(idxBytes, header)
+    val idxBytes = plex.getRange(timelineUrl, 0, (header.indexBytes - 1).toLong())
+    val index = Timeline.parseIndex(idxBytes, header)
     say("index fetched in", "${System.currentTimeMillis() - t0} ms")
 
     // --------------------------------------------------------- invariants
-    val fileSize = plex.totalSize(bifUrl)
+    val fileSize = plex.totalSize(timelineUrl)
     val sum = index.sumOf { it.length.toLong() }
     say("file size", fileSize?.toString() ?: "unknown")
     val ok = fileSize != null && sum + header.indexBytes == fileSize
@@ -79,9 +79,9 @@ fun main() {
         "max ${sizes.last()}  mean ${sizes.average().toInt()}")
 
     // ------------------------------------------------------------ subtitles
-    val cues = if (subKey.isNotEmpty()) {
+    val cues = if (subtitleRef.isNotEmpty()) {
         val t1 = System.currentTimeMillis()
-        val text = plex.getText(plex.subtitleUrl(server, subKey))
+        val text = plex.getText(plex.subtitleUrl(server, subtitleRef))
         val parsed = Srt.parse(text)
         say("subtitles", "${parsed.size} cues, ${text.length} chars, " +
             "parsed in ${System.currentTimeMillis() - t1} ms")
@@ -93,7 +93,7 @@ fun main() {
 
     // -------------------------------------------------------------- scenes
     val intervalMs = 10_000L
-    val ep = Episode(index, BifIndex.pickFrames(index, intervalMs), cues, intervalMs)
+    val ep = Episode(index, Timeline.pickFrames(index, intervalMs), cues, intervalMs)
     say("scene interval", "$intervalMs ms")
     say("scenes", ep.sceneCount.toString())
 
@@ -118,7 +118,7 @@ fun main() {
         val r = SceneResolver.resolve(ep, i) ?: continue
         val ent = index[r.frameIndex]
         val t2 = System.currentTimeMillis()
-        val jpeg = plex.getRange(bifUrl, ent.offset.toLong(), (ent.offset + ent.length - 1).toLong())
+        val jpeg = plex.getRange(timelineUrl, ent.offset.toLong(), (ent.offset + ent.length - 1).toLong())
         fetched += jpeg.size
         val cueList = ep.cuesFor(r.frameIndex)
         println("    scene %-2d -> frame %-4d @%5ds  %6d B  %d cues  %dms".format(

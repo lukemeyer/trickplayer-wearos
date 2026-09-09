@@ -18,12 +18,12 @@ class PlexLibrary(private val server: String, private val plex: PlexClient) {
     private val json = Json { ignoreUnknownKeys = true; isLenient = true }
 
     data class Section(val key: String, val title: String, val type: String)
-    data class Item(val ratingKey: String, val title: String, val subtitle: String)
+    data class Item(val itemId: String, val title: String, val subtitle: String)
 
     /** An item that can actually be shown: it has both halves. */
     data class Playable(
-        val partId: Long,
-        val subKey: String,
+        val timelineRef: Long,
+        val subtitleRef: String,
         val subLanguage: String,
         val title: String,
         val durationMs: Long,
@@ -111,8 +111,8 @@ class PlexLibrary(private val server: String, private val plex: PlexClient) {
      * metadata for every item in the library up front in batches of 20, which is
      * slow on a desktop and hopeless on a watch — and most of it is thrown away.
      */
-    fun playable(ratingKey: String): Playable? {
-        val meta = get("/library/metadata/$ratingKey").arr("Metadata").firstOrNull() ?: return null
+    fun playable(itemId: String): Playable? {
+        val meta = get("/library/metadata/$itemId").arr("Metadata").firstOrNull() ?: return null
 
         for (media in meta.arr("Media")) {
             for (part in media.arr("Part")) {
@@ -123,8 +123,8 @@ class PlexLibrary(private val server: String, private val plex: PlexClient) {
                         st.str("key").isNotEmpty()
                 } ?: continue
                 return Playable(
-                    partId = part.long("id"),
-                    subKey = sub.str("key"),
+                    timelineRef = part.long("id"),
+                    subtitleRef = sub.str("key"),
                     subLanguage = sub.str("language"),
                     title = titleOf(meta),
                     durationMs = meta.long("duration"),

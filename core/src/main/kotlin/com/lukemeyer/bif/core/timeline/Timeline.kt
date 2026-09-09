@@ -1,7 +1,20 @@
-package com.lukemeyer.bif.core.bif
+package com.lukemeyer.bif.core.timeline
 
 /**
- * BIF (Roku/Plex trick-play index) parsing.
+ * The frame timeline for one item: which frame exists at which moment, and
+ * where to get it.
+ *
+ * **Named `Timeline`, not `BifIndex` and not `Trickplay`, on purpose.** BIF is a
+ * Plex/Roku container; the *concept* of a frame timeline survives a second media
+ * source but the format does not, so a type that hands out BIF byte offsets
+ * would make adding one a rewrite. `Trickplay` is out because that is the name
+ * of Jellyfin's own feature, and the collision would land in exactly the file
+ * where it is most confusing. See trickplayer-knowledge/PLAN.md §6-7.
+ *
+ * Today the only source is Plex, so what follows parses BIF specifically. The
+ * seam that makes that an implementation detail is Phase 3.
+ *
+ * ## BIF (Roku/Plex trick-play index) parsing
  *
  * Layout: a 64-byte header, then (count + 1) 8-byte entries of
  * [timestamp uint32 LE, offset uint32 LE]. The final entry is a sentinel whose
@@ -22,7 +35,7 @@ package com.lukemeyer.bif.core.bif
  *  2. The last entry's length comes from the sentinel, not from the file size
  *     guessed at by the caller.
  */
-object BifIndex {
+object Timeline {
 
     private val MAGIC = byteArrayOf(
         0x89.toByte(), 0x42, 0x49, 0x46, 0x0d, 0x0a, 0x1a, 0x0a,
@@ -31,7 +44,7 @@ object BifIndex {
     const val HEADER_BYTES = 64
 
     /** One frame's position in the BIF file. */
-    data class Entry(val tsMs: Long, val offset: Int, val length: Int)
+    data class FrameRef(val tsMs: Long, val offset: Int, val length: Int)
 
     data class Header(
         val version: Int,
@@ -69,7 +82,7 @@ object BifIndex {
      *   [Header.indexBytes] long.
      * @return one entry per frame, in file order.
      */
-    fun parseIndex(bytes: ByteArray, header: Header): List<Entry> {
+    fun parseIndex(bytes: ByteArray, header: Header): List<FrameRef> {
         require(bytes.size >= header.indexBytes) {
             "need ${header.indexBytes} index bytes, got ${bytes.size}"
         }
@@ -80,7 +93,7 @@ object BifIndex {
             // The next entry's offset is this frame's end. For the last frame
             // that next entry is the sentinel, whose offset is EOF.
             val next = u32(bytes, HEADER_BYTES + 8 * (i + 1) + 4).toInt()
-            Entry(tsMs = ts * header.multiplier, offset = off, length = next - off)
+            FrameRef(tsMs = ts * header.multiplier, offset = off, length = next - off)
         }
     }
 
@@ -95,7 +108,7 @@ object BifIndex {
      * whole scene model collapses. At 10 s the measured average is 3.17 cues per
      * scene.
      */
-    fun pickFrames(index: List<Entry>, intervalMs: Long): List<Int> {
+    fun pickFrames(index: List<FrameRef>, intervalMs: Long): List<Int> {
         val picked = ArrayList<Int>()
         var nextTs = 0L
         for (i in index.indices) {

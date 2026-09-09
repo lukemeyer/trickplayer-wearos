@@ -170,7 +170,7 @@ class ConfigViewModel(app: Application) : AndroidViewModel(app) {
     }
 
     fun chooseShow(show: PlexLibrary.Item) = bg {
-        val eps = library!!.episodes(show.ratingKey)
+        val eps = library!!.episodes(show.itemId)
         _state.update { it.copy(step = Step.Items(show.title), busy = false) }
         scan(eps)
     }
@@ -192,7 +192,7 @@ class ConfigViewModel(app: Application) : AndroidViewModel(app) {
             val lib = library ?: return@launch
             for (item in items) {
                 val p = try {
-                    withContext(Dispatchers.IO) { lib.playable(item.ratingKey) }
+                    withContext(Dispatchers.IO) { lib.playable(item.itemId) }
                 } catch (e: Exception) { null }
                 _state.update { s ->
                     s.copy(
@@ -213,8 +213,8 @@ class ConfigViewModel(app: Application) : AndroidViewModel(app) {
             server = uri,
             routes = routes.ifEmpty { listOf(uri) },
             token = s.accessToken,
-            partId = play.partId,
-            subKey = play.subKey,
+            timelineRef = play.timelineRef,
+            subtitleRef = play.subtitleRef,
             title = play.title.ifEmpty { item.title },
             intervalMs = 10_000L,
             skipSilent = true,

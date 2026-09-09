@@ -1,4 +1,4 @@
-package com.lukemeyer.bif.core.bif
+package com.lukemeyer.bif.core.timeline
 
 import org.junit.jupiter.api.Assertions.assertEquals
 import org.junit.jupiter.api.Assertions.assertThrows
@@ -10,7 +10,7 @@ import org.junit.jupiter.api.Test
  * Plex BIF looks like — crucially, **multiplier 0** and a real sentinel entry,
  * which are the two things the Pebble port got wrong first time round.
  */
-class BifIndexTest {
+class TimelineTest {
 
     private fun le32(v: Long) = byteArrayOf(
         (v and 0xff).toByte(),
@@ -59,27 +59,27 @@ class BifIndexTest {
         // The whole cue-to-frame mapping rests on this. Reading offset 16
         // literally yields all-zero timestamps and a silently broken face.
         val bif = makeBif(listOf(100, 200, 300), multiplier = 0)
-        val header = BifIndex.parseHeader(bif)
+        val header = Timeline.parseHeader(bif)
         assertEquals(1000, header.multiplier)
 
-        val index = BifIndex.parseIndex(bif, header)
+        val index = Timeline.parseIndex(bif, header)
         assertEquals(listOf(0L, 2000L, 4000L), index.map { it.tsMs })
     }
 
     @Test
     fun `an explicit multiplier is honoured`() {
         val bif = makeBif(listOf(10, 20), spacingSec = 3, multiplier = 500)
-        val header = BifIndex.parseHeader(bif)
+        val header = Timeline.parseHeader(bif)
         assertEquals(500, header.multiplier)
-        assertEquals(listOf(0L, 1500L), BifIndex.parseIndex(bif, header).map { it.tsMs })
+        assertEquals(listOf(0L, 1500L), Timeline.parseIndex(bif, header).map { it.tsMs })
     }
 
     @Test
     fun `frame lengths come from the next offset, last one from the sentinel`() {
         val sizes = listOf(580, 12896, 21670)
         val bif = makeBif(sizes)
-        val header = BifIndex.parseHeader(bif)
-        val index = BifIndex.parseIndex(bif, header)
+        val header = Timeline.parseHeader(bif)
+        val index = Timeline.parseIndex(bif, header)
         assertEquals(sizes, index.map { it.length })
     }
 
@@ -89,8 +89,8 @@ class BifIndexTest {
         // the Pebble parser correct against the real 9,497,976 byte file.
         val sizes = List(736) { 580 + (it * 37) % 21_000 }
         val bif = makeBif(sizes)
-        val header = BifIndex.parseHeader(bif)
-        val index = BifIndex.parseIndex(bif, header)
+        val header = Timeline.parseHeader(bif)
+        val index = Timeline.parseIndex(bif, header)
 
         assertEquals(736, header.count)
         assertEquals(64 + 8 * 737, header.indexBytes)
@@ -102,14 +102,14 @@ class BifIndexTest {
         // The shipping path range-fetches 64 bytes, then indexBytes. Parsing the
         // header must not need any more than those 64.
         val bif = makeBif(List(736) { 1000 })
-        val header = BifIndex.parseHeader(bif.copyOfRange(0, 64))
+        val header = Timeline.parseHeader(bif.copyOfRange(0, 64))
         assertEquals(5960, header.indexBytes)
     }
 
     @Test
     fun `rejects a non-BIF file`() {
         val notBif = ByteArray(64) { 0x7f }
-        assertThrows(IllegalArgumentException::class.java) { BifIndex.parseHeader(notBif) }
+        assertThrows(IllegalArgumentException::class.java) { Timeline.parseHeader(notBif) }
     }
 
     @Test
@@ -117,10 +117,10 @@ class BifIndexTest {
         // The measured reality: Plex emits frames 2s apart. A 10s scene interval
         // must therefore select every 5th frame.
         val bif = makeBif(List(100) { 1000 }, spacingSec = 2)
-        val header = BifIndex.parseHeader(bif)
-        val index = BifIndex.parseIndex(bif, header)
+        val header = Timeline.parseHeader(bif)
+        val index = Timeline.parseIndex(bif, header)
 
-        val picked = BifIndex.pickFrames(index, 10_000)
+        val picked = Timeline.pickFrames(index, 10_000)
         assertEquals(20, picked.size)
         assertEquals(listOf(0, 5, 10, 15), picked.take(4))
         assertEquals(listOf(0L, 10_000L, 20_000L), picked.take(3).map { index[it].tsMs })
@@ -129,9 +129,9 @@ class BifIndexTest {
     @Test
     fun `pickFrames at or below native spacing keeps every frame`() {
         val bif = makeBif(List(50) { 1000 }, spacingSec = 2)
-        val header = BifIndex.parseHeader(bif)
-        val index = BifIndex.parseIndex(bif, header)
-        assertEquals(50, BifIndex.pickFrames(index, 2000).size)
-        assertEquals(50, BifIndex.pickFrames(index, 1).size)
+        val header = Timeline.parseHeader(bif)
+        val index = Timeline.parseIndex(bif, header)
+        assertEquals(50, Timeline.pickFrames(index, 2000).size)
+        assertEquals(50, Timeline.pickFrames(index, 1).size)
     }
 }

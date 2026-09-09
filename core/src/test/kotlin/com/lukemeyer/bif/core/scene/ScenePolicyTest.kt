@@ -1,6 +1,6 @@
 package com.lukemeyer.bif.core.scene
 
-import com.lukemeyer.bif.core.bif.BifIndex
+import com.lukemeyer.bif.core.timeline.Timeline
 import com.lukemeyer.bif.core.subs.Srt
 import org.junit.jupiter.api.Assertions.assertEquals
 import org.junit.jupiter.api.Assertions.assertNotEquals
@@ -18,9 +18,9 @@ class ScenePolicyTest {
         cues: List<Srt.Cue> = defaultCues(frameCount),
     ): Episode {
         val index = List(frameCount) { i ->
-            BifIndex.Entry(tsMs = i * 2000L, offset = i * 1000, length = sizes(i))
+            Timeline.FrameRef(tsMs = i * 2000L, offset = i * 1000, length = sizes(i))
         }
-        return Episode(index, BifIndex.pickFrames(index, intervalMs), cues, intervalMs, skipSilent)
+        return Episode(index, Timeline.pickFrames(index, intervalMs), cues, intervalMs, skipSilent)
     }
 
     /** One cue every 3 s, so a 10 s window holds about three. */

@@ -2,7 +2,7 @@ package com.lukemeyer.bif.data
 
 import android.content.Context
 import android.util.Log
-import com.lukemeyer.bif.core.bif.BifIndex
+import com.lukemeyer.bif.core.timeline.Timeline
 import com.lukemeyer.bif.core.plex.PlexClient
 import com.lukemeyer.bif.core.scene.Episode
 import com.lukemeyer.bif.core.scene.SceneResolver
@@ -35,7 +35,7 @@ class EpisodeRepository private constructor(
         (listOf(config.server) + config.routes).distinct()
 
     @Volatile private var active: String = config.server
-    private fun bifUrl() = plex.bifUrl(active, config.partId)
+    private fun timelineUrl() = plex.timelineUrl(active, config.timelineRef)
 
     /**
      * Run a fetch, falling back through the other routes when the current one
@@ -92,21 +92,21 @@ class EpisodeRepository private constructor(
 
         val idxBytes = indexFile.takeIf { it.exists() }?.readBytes() ?: run {
             viaAnyRoute("index") { uri ->
-                val url = plex.bifUrl(uri, config.partId)
+                val url = plex.timelineUrl(uri, config.timelineRef)
                 val head = plex.getRange(url, 0, 63)
-                val header = BifIndex.parseHeader(head)
+                val header = Timeline.parseHeader(head)
                 Log.i(TAG, "BIF ${header.count} frames, multiplier ${header.multiplier} ms")
                 plex.getRange(url, 0, (header.indexBytes - 1).toLong())
             }?.also { indexFile.writeBytes(it) }
                 ?: throw java.io.IOException("no route to the Plex server")
         }
-        val header = BifIndex.parseHeader(idxBytes)
-        val index = BifIndex.parseIndex(idxBytes, header)
+        val header = Timeline.parseHeader(idxBytes)
+        val index = Timeline.parseIndex(idxBytes, header)
 
         val srt = subsFile.takeIf { it.exists() }?.readText() ?: run {
-            if (config.subKey.isEmpty()) "" else {
+            if (config.subtitleRef.isEmpty()) "" else {
                 viaAnyRoute("subtitles") { uri ->
-                    plex.getText(plex.subtitleUrl(uri, config.subKey))
+                    plex.getText(plex.subtitleUrl(uri, config.subtitleRef))
                 }?.also { subsFile.writeText(it) } ?: ""
             }
         }
@@ -114,7 +114,7 @@ class EpisodeRepository private constructor(
 
         val ep = Episode(
             index = index,
-            picked = BifIndex.pickFrames(index, config.intervalMs),
+            picked = Timeline.pickFrames(index, config.intervalMs),
             cues = cues,
             intervalMs = config.intervalMs,
             skipSilent = config.skipSilent,
@@ -143,7 +143,7 @@ class EpisodeRepository private constructor(
 
         val jpeg = viaAnyRoute("scene $sceneIndex") { uri ->
             plex.getRange(
-                plex.bifUrl(uri, config.partId),
+                plex.timelineUrl(uri, config.timelineRef),
                 ent.offset.toLong(),
                 (ent.offset + ent.length - 1).toLong(),
             )

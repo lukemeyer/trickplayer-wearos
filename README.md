@@ -75,7 +75,7 @@ different reason.
 ```
 src/
   core/        pure Kotlin/JVM — no Android imports, so :tools can run it headlessly
-    bif/       BifIndex.parse, pickFrames
+    timeline/  Timeline.parseIndex, pickFrames
     subs/      Srt.parse, cuesInWindow
     scene/     Episode, SceneResolver, Cursor — the advance/skip policy
     plex/      PlexClient (OkHttp, ranged GETs)
@@ -89,7 +89,7 @@ src/
 ```
 
 `:core` staying free of Android imports is the direct descendant of the trick
-that made Pebble's Phase 0 work — `bif.js` ran under both PebbleKit JS and Node,
+that made Pebble's Phase 0 work — `timeline.js` ran under both PebbleKit JS and Node,
 so the pipeline could be exercised against a real server with nothing attached.
 
 ## Build and run
