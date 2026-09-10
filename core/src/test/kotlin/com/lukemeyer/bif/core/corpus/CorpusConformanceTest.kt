@@ -182,6 +182,17 @@ class CorpusConformanceTest {
                 assertEquals(f["offset"]!!.jsonPrimitive.int, index[i].offset, "$name frame $i offset")
                 assertEquals(f["length"]!!.jsonPrimitive.int, index[i].length, "$name frame $i length")
             }
+
+            // The zero-I/O length heuristic against HASHED ground truth from a
+            // real encoder (F-036) — the assertion the finding rests on, which
+            // a synthetic fixture cannot make honestly.
+            exp["duplicateOf"]?.jsonArray?.let { truthArr ->
+                val truth = truthArr.map { it !is kotlinx.serialization.json.JsonNull }
+                val ep = Episode(index, emptyList(), durationMs = index.last().tsMs, skipSilent = false)
+                var falsePositives = 0
+                ep.duplicateFlags.forEachIndexed { i, d -> if (d && !truth[i]) falsePositives++ }
+                assertEquals(0, falsePositives, "$name: heuristic flagged a distinct frame")
+            }
         }
     }
 
