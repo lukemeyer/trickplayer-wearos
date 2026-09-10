@@ -6,6 +6,8 @@ import com.lukemeyer.bif.core.timeline.Timeline
 import com.lukemeyer.bif.core.plex.PlexClient
 import com.lukemeyer.bif.core.scene.Episode
 import com.lukemeyer.bif.core.scene.SceneResolver
+import com.lukemeyer.bif.core.source.Playable
+import com.lukemeyer.bif.core.source.PlexSource
 import com.lukemeyer.bif.core.subs.Srt
 import java.io.File
 
@@ -35,6 +37,20 @@ class EpisodeRepository private constructor(
         (listOf(config.server) + config.routes).distinct()
 
     @Volatile private var active: String = config.server
+
+    /**
+     * This episode as the seam sees it.
+     *
+     * Route-independent — a [PlexSource] is built per route inside
+     * [viaAnyRoute], because failover is a device concern and not a source one.
+     */
+    private val playable = Playable(
+        title = config.title,
+        durationMs = null,
+        timelineRef = PlexSource.PlexTimelineRef(config.timelineRef),
+        subtitleRef = if (config.subtitleRef.isEmpty()) null
+            else PlexSource.PlexSubtitleRef(config.subtitleRef),
+    )
     private fun timelineUrl() = plex.timelineUrl(active, config.timelineRef)
 
     /**
@@ -117,7 +133,7 @@ class EpisodeRepository private constructor(
         // dropped by declared length, and silent windows go last (F-001,
         // F-036). No interval to choose any more.
         val ep = Episode(
-            index = index,
+            index = Timeline.toFrameRefs(index),
             cues = cues,
             durationMs = index.lastOrNull()?.tsMs ?: 0L,
             skipSilent = config.skipSilent,
@@ -145,12 +161,11 @@ class EpisodeRepository private constructor(
         val r = SceneResolver.resolve(ep, sceneIndex) ?: return null
         val ent = ep.index[r.frameIndex]
 
+        // The provider reads its own locator; this layer never does. On Plex
+        // that is a byte range, on a tile-sheet source a sheet and a grid cell,
+        // and the difference stays behind the seam (SEAM.md §5).
         val jpeg = viaAnyRoute("scene $sceneIndex") { uri ->
-            plex.getRange(
-                plex.timelineUrl(uri, config.timelineRef),
-                ent.offset.toLong(),
-                (ent.offset + ent.length - 1).toLong(),
-            )
+            PlexSource(plex, uri).frameBytes(playable, ent)
         } ?: return null
 
         val cues = ep.cuesFor(r.scene).ifEmpty { listOf(fmtTime(ent.tsMs)) }

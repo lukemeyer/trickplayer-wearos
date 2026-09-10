@@ -1,6 +1,6 @@
 package com.lukemeyer.bif.core.scene
 
-import com.lukemeyer.bif.core.timeline.Timeline
+import com.lukemeyer.bif.core.source.FrameRef
 import com.lukemeyer.bif.core.subs.Srt
 
 /**
@@ -38,11 +38,28 @@ data class Scene(
  * so it is worth holding whole — it is what makes most advances text-only.
  */
 class Episode(
-    val index: List<Timeline.FrameRef>,
+    val index: List<FrameRef>,
     val cues: List<Srt.Cue>,
     /** End of the last scene's window. Usually the last frame's timestamp. */
     val durationMs: Long = index.lastOrNull()?.tsMs ?: 0L,
     val skipSilent: Boolean = true,
+    /**
+     * From the provider's [com.lukemeyer.bif.core.source.Capabilities].
+     *
+     * False means this source has no per-frame byte lengths — a tile-sheet
+     * source has none, because a thumbnail is a crop and not a file. Blank
+     * filtering and duplicate detection both read that length, so both are
+     * **skipped, not faked**: no guessing duplicates from timing, no treating
+     * every frame as non-blank and calling that filtering.
+     *
+     * Taking the decision once, here, is deliberate. The alternative — each
+     * filter separately discovering a null size hint and deciding for itself —
+     * is how two filters end up disagreeing about what "unavailable" means.
+     *
+     * Measured on the same film: 55 scenes from Plex, 34 from Jellyfin. That
+     * gap is correct. See `trickplayer-knowledge/SEAM.md` §4.
+     */
+    val hasFrameSizeHints: Boolean = true,
     private val blankThresholdPct: Int = 15,
 ) {
 
@@ -66,10 +83,15 @@ class Episode(
      * The threshold is relative to this episode's own median rather than a fixed
      * number, so it travels to content with different encoding settings.
      */
-    val blankThresholdBytes: Int = if (index.isEmpty()) 0 else {
+    val blankThresholdBytes: Int = run {
+        // Zero means "nothing is ever judged blank", which is the right answer
+        // both for an empty episode and for a source with no size hints.
+        if (index.isEmpty() || !hasFrameSizeHints) return@run 0
+        val sorted = index.mapNotNull { it.sizeHint }.sorted()
+        if (sorted.isEmpty()) return@run 0
+
         // Mean of the two middle values for an even-length list, NOT
         // sorted[size / 2] — see trickplayer-knowledge findings/F-034.
-        val sorted = index.map { it.length }.sorted()
         val mid = sorted.size / 2
         val median = if (sorted.size % 2 == 0) {
             (sorted[mid - 1] + sorted[mid]) / 2.0
@@ -94,9 +116,13 @@ class Episode(
      */
     val duplicateFlags: List<Boolean> = run {
         val dup = MutableList(index.size) { false }
-        var rep = 0
-        for (i in 1 until index.size) {
-            if (index[i].length == index[rep].length) dup[i] = true else rep = i
+        if (hasFrameSizeHints) {
+            var rep = 0
+            for (i in 1 until index.size) {
+                val a = index[i].sizeHint
+                val b = index[rep].sizeHint
+                if (a != null && b != null && a == b) dup[i] = true else rep = i
+            }
         }
         dup
     }
@@ -149,8 +175,11 @@ class Episode(
 
     val sceneCount: Int get() = scenes.size
 
-    fun isNearBlank(frameIndex: Int): Boolean =
-        index[frameIndex].length < blankThresholdBytes
+    fun isNearBlank(frameIndex: Int): Boolean {
+        if (!hasFrameSizeHints) return false
+        val size = index[frameIndex].sizeHint ?: return false
+        return size < blankThresholdBytes
+    }
 
     /** The cues belonging to this scene's window. */
     fun cuesFor(scene: SceneRef): List<String> =

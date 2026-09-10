@@ -27,7 +27,12 @@ class ScenePolicyTest {
         val index = List(frameCount) { i ->
             Timeline.FrameRef(tsMs = i * 2000L, offset = i * 1000, length = sizes(i))
         }
-        return Episode(index, cues, durationMs = frameCount * 2000L, skipSilent = skipSilent)
+        return Episode(
+            Timeline.toFrameRefs(index),
+            cues,
+            durationMs = frameCount * 2000L,
+            skipSilent = skipSilent,
+        )
     }
 
     private val Episode.frameIndices: List<Int> get() = scenes.map { it.frameIndex }

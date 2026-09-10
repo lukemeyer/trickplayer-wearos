@@ -92,7 +92,7 @@ fun main() {
     }
 
     // -------------------------------------------------------------- scenes
-    val ep = Episode(index, cues, durationMs = index.last().tsMs)
+    val ep = Episode(Timeline.toFrameRefs(index), cues, durationMs = index.last().tsMs)
     say("binning", "the source's own frame timings (F-001), not a fixed interval")
     say("frames in index", index.size.toString())
     say("blank threshold", "${ep.blankThresholdBytes} B (15% of median)")

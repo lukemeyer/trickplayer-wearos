@@ -2,6 +2,8 @@ package com.lukemeyer.bif.core.corpus
 
 import com.lukemeyer.bif.core.subs.Srt
 import com.lukemeyer.bif.core.scene.Episode
+import com.lukemeyer.bif.core.source.FrameLocator
+import com.lukemeyer.bif.core.source.FrameRef
 import com.lukemeyer.bif.core.timeline.Timeline
 import kotlinx.serialization.json.*
 import kotlinx.serialization.json.contentOrNull
@@ -152,6 +154,62 @@ class CorpusConformanceTest {
         }
     }
 
+    @Test
+    @DisplayName("scene: a source with no per-frame sizes skips the filters, not fakes them")
+    fun sceneNoSizeHints() {
+        // A tile-sheet source has no per-frame byte lengths at all, so blank
+        // filtering and duplicate detection have no input. SEAM.md §4: they are
+        // SKIPPED, not substituted for. This is the case that makes the seam
+        // real rather than declarative — before the refactor this build could
+        // not express it.
+        val fx = obj("scene/episode.frames.json")
+        val cx = obj("scene/episode.cues.json")
+        val want = obj("scene/episode.expected.json")["cases"]!!
+            .jsonObject["no-size-hints"]!!.jsonObject["expect"]!!.jsonObject
+
+        val noSize = fx["frames"]!!.jsonArray.map {
+            FrameRef(
+                tsMs = it.jsonObject["tsMs"]!!.jsonPrimitive.long,
+                sizeHint = null,
+                locator = object : FrameLocator {},
+            )
+        }
+        val cues = cx["cues"]!!.jsonArray.map {
+            val c = it.jsonObject
+            Srt.Cue(c["startMs"]!!.jsonPrimitive.long, c["endMs"]!!.jsonPrimitive.long, "x")
+        }
+        val ep = Episode(
+            index = noSize,
+            cues = cues,
+            durationMs = fx["durationMs"]!!.jsonPrimitive.long,
+            skipSilent = true,
+            hasFrameSizeHints = false,
+        )
+
+        assertEquals(want["sceneCount"]!!.jsonPrimitive.int, ep.sceneCount, "sceneCount")
+        assertEquals(0, ep.blankThresholdBytes, "nothing can be judged blank")
+        assertEquals(false, ep.duplicateFlags.any { it }, "nothing can be judged duplicate")
+        assertEquals(false, noSize.indices.any { ep.isNearBlank(it) }, "isNearBlank must be false throughout")
+
+        // And the same fixture WITH sizes must differ, or the gate does nothing.
+        val withSize = fx["frames"]!!.jsonArray.map {
+            val f = it.jsonObject
+            FrameRef(
+                tsMs = f["tsMs"]!!.jsonPrimitive.long,
+                sizeHint = f["length"]!!.jsonPrimitive.int,
+                locator = object : FrameLocator {},
+            )
+        }
+        val full = Episode(
+            index = withSize, cues = cues,
+            durationMs = fx["durationMs"]!!.jsonPrimitive.long, skipSilent = true,
+        )
+        assertTrue(
+            full.sceneCount < ep.sceneCount,
+            "size hints should filter something: ${full.sceneCount} vs ${ep.sceneCount}",
+        )
+    }
+
     // ---------------------------------------------------------------- real
 
     @Test
@@ -195,7 +253,10 @@ class CorpusConformanceTest {
             // a synthetic fixture cannot make honestly.
             exp["duplicateOf"]?.jsonArray?.let { truthArr ->
                 val truth = truthArr.map { it !is kotlinx.serialization.json.JsonNull }
-                val ep = Episode(index, emptyList(), durationMs = index.last().tsMs, skipSilent = false)
+                val ep = Episode(
+                    Timeline.toFrameRefs(index), emptyList(),
+                    durationMs = index.last().tsMs, skipSilent = false,
+                )
                 var falsePositives = 0
                 ep.duplicateFlags.forEachIndexed { i, d -> if (d && !truth[i]) falsePositives++ }
                 assertEquals(0, falsePositives, "$name: heuristic flagged a distinct frame")
@@ -257,7 +318,7 @@ class CorpusConformanceTest {
             Srt.Cue(c["startMs"]!!.jsonPrimitive.long, c["endMs"]!!.jsonPrimitive.long, "x")
         }
         val ep = Episode(
-            index = index,
+            index = Timeline.toFrameRefs(index),
             cues = cues,
             durationMs = fx["durationMs"]!!.jsonPrimitive.long,
             skipSilent = true,
@@ -313,7 +374,7 @@ class CorpusConformanceTest {
                 Timeline.FrameRef(tsMs = i * 2000L, offset = 0, length = len)
             }
             val ep = Episode(
-                index = index,
+                index = Timeline.toFrameRefs(index),
                 cues = emptyList(),
                 durationMs = index.size * 2000L,
                 skipSilent = false,

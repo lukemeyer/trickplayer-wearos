@@ -1,5 +1,7 @@
 package com.lukemeyer.bif.core.timeline
 
+import com.lukemeyer.bif.core.source.FrameLocator
+
 /**
  * The frame timeline for one item: which frame exists at which moment, and
  * where to get it.
@@ -44,7 +46,15 @@ object Timeline {
     const val HEADER_BYTES = 64
 
     /** One frame's position in the BIF file. */
-    data class FrameRef(val tsMs: Long, val offset: Int, val length: Int)
+    /**
+     * A frame's position **in the BIF file** — a byte range.
+     *
+     * This is a Plex [FrameLocator]: shared code never reads `offset` or
+     * `length`, because a tile-sheet source has neither. It reaches the scene
+     * policy wrapped in a `source.FrameRef`, which carries only the timestamp
+     * and a size hint. See `trickplayer-knowledge/SEAM.md`.
+     */
+    data class FrameRef(val tsMs: Long, val offset: Int, val length: Int) : FrameLocator
 
     data class Header(
         val version: Int,
@@ -96,6 +106,19 @@ object Timeline {
             FrameRef(tsMs = ts * header.multiplier, offset = off, length = next - off)
         }
     }
+
+    /**
+     * Lift a parsed BIF index into the source-neutral form the scene policy
+     * consumes. The byte length becomes the size hint — Plex is a source that
+     * *can* answer that question, which is why blank filtering and duplicate
+     * detection are available here and not on a tile-sheet source.
+     */
+    fun toFrameRefs(index: List<FrameRef>): List<com.lukemeyer.bif.core.source.FrameRef> =
+        index.map {
+            com.lukemeyer.bif.core.source.FrameRef(
+                tsMs = it.tsMs, sizeHint = it.length, locator = it,
+            )
+        }
 
     /**
      * Pick one frame every [intervalMs] of video, rather than using the BIF's
