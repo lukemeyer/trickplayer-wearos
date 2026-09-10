@@ -15,7 +15,13 @@ package com.lukemeyer.bif.core.scene
  */
 object SceneResolver {
 
-    data class Resolved(val sceneIndex: Int, val frameIndex: Int, val skipped: Int)
+    data class Resolved(
+        val sceneIndex: Int,
+        val scene: Episode.SceneRef,
+        val skipped: Int,
+    ) {
+        val frameIndex: Int get() = scene.frameIndex
+    }
 
     /**
      * @param sceneIndex wraps at the end of the episode, so a face left running

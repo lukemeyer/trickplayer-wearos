@@ -279,7 +279,6 @@ class ConfigViewModel(app: Application) : AndroidViewModel(app) {
             timelineRef = play.timelineRef,
             subtitleRef = play.subtitleRef,
             title = play.title.ifEmpty { item.title },
-            intervalMs = 10_000L,
             skipSilent = true,
         )
         scanJob?.cancel()

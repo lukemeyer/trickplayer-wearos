@@ -9,19 +9,28 @@ import org.junit.jupiter.api.Test
 
 class ScenePolicyTest {
 
-    /** Frames 2 s apart, all a typical size unless overridden. */
+    /**
+     * Frames 2 s apart at a typical size.
+     *
+     * Sizes are **deliberately distinct** by default. Duplicate detection keys
+     * on declared length (F-036), so a helper that gave every frame the same
+     * size would flag all but the first as duplicates and collapse every
+     * episode here to one scene — which is correct behaviour and useless as a
+     * fixture. Tests that want duplicates ask for them explicitly.
+     */
     private fun episode(
         frameCount: Int = 100,
-        intervalMs: Long = 10_000,
         skipSilent: Boolean = true,
-        sizes: (Int) -> Int = { 12_896 },
+        sizes: (Int) -> Int = { 12_896 + it * 7 },
         cues: List<Srt.Cue> = defaultCues(frameCount),
     ): Episode {
         val index = List(frameCount) { i ->
             Timeline.FrameRef(tsMs = i * 2000L, offset = i * 1000, length = sizes(i))
         }
-        return Episode(index, Timeline.pickFrames(index, intervalMs), cues, intervalMs, skipSilent)
+        return Episode(index, cues, durationMs = frameCount * 2000L, skipSilent = skipSilent)
     }
+
+    private val Episode.frameIndices: List<Int> get() = scenes.map { it.frameIndex }
 
     /** One cue every 3 s, so a 10 s window holds about three. */
     private fun defaultCues(frameCount: Int) =
@@ -36,7 +45,7 @@ class ScenePolicyTest {
         val ep = episode()
         val r = SceneResolver.resolve(ep, 3)!!
         assertEquals(3, r.sceneIndex)
-        assertTrue(r.frameIndex in ep.scenes)
+        assertTrue(r.frameIndex in ep.frameIndices)
     }
 
     @Test
@@ -45,7 +54,7 @@ class ScenePolicyTest {
         // earlier skip-at-read-time approach violated it against real content:
         // a scene that skipped forward took a later scene's frame, and that
         // scene then showed the same picture again.
-        val ep = episode(sizes = { if (it % 7 == 0) 580 else 12_896 })
+        val ep = episode(sizes = { if (it % 7 == 0) 580 else 12_896 + it * 7 })
         val frames = (0 until ep.sceneCount).mapNotNull { SceneResolver.resolve(ep, it)?.frameIndex }
         assertEquals(frames.size, frames.toSet().size, "a frame is used by more than one scene")
     }
@@ -54,9 +63,9 @@ class ScenePolicyTest {
     fun `near-blank frames are excluded up front, not skipped at read time`() {
         // Frame 0 of the test episode is a 580 B black frame against a 12,896 B
         // mean. It must simply not be in the list.
-        val ep = episode(sizes = { if (it == 0) 580 else 12_896 })
+        val ep = episode(sizes = { if (it == 0) 580 else 12_896 + it * 7 })
         assertTrue(ep.isNearBlank(0))
-        assertTrue(0 !in ep.scenes)
+        assertTrue(0 !in ep.frameIndices)
         assertEquals(0, SceneResolver.resolve(ep, 0)!!.skipped)
     }
 
@@ -64,7 +73,7 @@ class ScenePolicyTest {
     fun `blank threshold is relative to the episode's own median`() {
         // A differently-encoded episode with much smaller frames must not have
         // every frame declared blank.
-        val small = episode(sizes = { if (it == 0) 90 else 2_000 })
+        val small = episode(sizes = { if (it == 0) 90 else 2_000 + it })
         assertTrue(small.isNearBlank(0))
         assertTrue(!small.isNearBlank(5))
     }
@@ -74,45 +83,84 @@ class ScenePolicyTest {
         // Cues only in the first 10 s; every later window is silent, so the
         // filter would gut the episode and the fallback keeps it watchable.
         val ep = episode(cues = listOf(Srt.Cue(0, 2000, "only line")))
-        assertEquals(ep.picked.size, ep.sceneCount, "should fall back rather than empty out")
+        assertEquals(100, ep.sceneCount, "should fall back rather than empty out")
 
         // With enough dialogue to survive the filter, silent windows go.
         val sparse = episode(cues = (0 until 40).map { Srt.Cue(it * 3000L, it * 3000L + 2000, "l$it") })
-        assertTrue(sparse.sceneCount in 8..sparse.picked.size)
+        assertTrue(sparse.sceneCount in 8..100)
+        assertTrue(sparse.sceneCount < 100, "silent windows should actually be removed")
         sparse.scenes.forEach { assertTrue(sparse.cuesFor(it).isNotEmpty()) }
     }
 
     @Test
     fun `skipSilent off keeps silent windows`() {
         val ep = episode(cues = listOf(Srt.Cue(0, 2000, "only line")), skipSilent = false)
-        assertEquals(ep.picked.size, ep.sceneCount)
+        assertEquals(100, ep.sceneCount)
     }
 
     @Test
     fun `scene index wraps at the end of the episode`() {
         val ep = episode(frameCount = 50)
         val r = SceneResolver.resolve(ep, ep.sceneCount + 2)!!
-        assertEquals(ep.scenes[2], r.frameIndex)
+        assertEquals(ep.scenes[2].frameIndex, r.frameIndex)
     }
 
     // ------------------------------------------------------- cue windowing
 
     @Test
-    fun `a ten second window holds about three cues`() {
-        // The number the whole design rests on: measured 3.17 on the real
-        // episode. With a cue every 3s a 10s window should hold 3 or 4.
-        val ep = episode()
-        val counts = ep.picked.map { ep.cuesFor(it).size }
-        val avg = counts.average()
-        assertTrue(avg in 3.0..4.0) { "expected ~3 cues per scene, got $avg" }
+    fun `a scene's window runs to the next kept frame`() {
+        // Binning is by the source's own frame timings now, not a fixed
+        // interval, so with nothing filtered a window is exactly the native
+        // frame spacing.
+        val ep = episode(skipSilent = false)
+        val first = ep.scenes[0]
+        assertEquals(2000L, first.windowEndMs - first.windowStartMs)
+        assertEquals(ep.scenes[1].windowStartMs, first.windowEndMs, "windows must tile with no gap")
+    }
+
+    @Test
+    fun `a skipped duplicate widens the surviving scene rather than losing its time`() {
+        // Frames 4, 5 and 6 share a length, so 5 and 6 are duplicates of 4.
+        // Scene 4 must then own their time too — otherwise the cues that start
+        // in that stretch would belong to no scene at all.
+        val ep = episode(
+            frameCount = 20,
+            skipSilent = false,
+            sizes = { if (it in 4..6) 9_000 else 12_896 + it * 7 },
+        )
+        assertTrue(5 !in ep.frameIndices)
+        assertTrue(6 !in ep.frameIndices)
+        val widened = ep.scenes.first { it.frameIndex == 4 }
+        assertEquals(8000L, widened.windowStartMs)
+        assertEquals(14000L, widened.windowEndMs, "should span frames 4, 5 and 6")
     }
 
     @Test
     fun `no cue appears in two consecutive scenes`() {
-        val ep = episode()
-        val a = ep.cuesFor(ep.picked[1]).toSet()
-        val b = ep.cuesFor(ep.picked[2]).toSet()
+        val ep = episode(skipSilent = false)
+        val a = ep.cuesFor(ep.scenes[1]).toSet()
+        val b = ep.cuesFor(ep.scenes[2]).toSet()
         assertTrue(a.intersect(b).isEmpty())
+    }
+
+    @Test
+    fun `duplicate frames are detected from declared length alone`() {
+        val ep = episode(
+            frameCount = 12,
+            skipSilent = false,
+            sizes = { if (it in 3..8) 5_000 else 12_896 + it * 7 },
+        )
+        // 3 is the run representative; 4..8 duplicate it.
+        assertEquals(listOf(4, 5, 6, 7, 8), (0..11).filter { ep.duplicateFlags[it] })
+        assertTrue(3 in ep.frameIndices)
+    }
+
+    @Test
+    fun `a static episode is not gutted by duplicate skipping`() {
+        // Every frame the same size: the heuristic calls all but the first a
+        // duplicate, which would leave one scene. The floor must win.
+        val ep = episode(frameCount = 40, skipSilent = false, sizes = { 12_896 })
+        assertEquals(40, ep.sceneCount, "floor should keep the episode watchable")
     }
 
     // -------------------------------------------------------------- cursor

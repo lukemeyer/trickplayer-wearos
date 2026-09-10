@@ -39,11 +39,19 @@ data class Scene(
  */
 class Episode(
     val index: List<Timeline.FrameRef>,
-    val picked: List<Int>,
     val cues: List<Srt.Cue>,
-    val intervalMs: Long,
+    /** End of the last scene's window. Usually the last frame's timestamp. */
+    val durationMs: Long = index.lastOrNull()?.tsMs ?: 0L,
     val skipSilent: Boolean = true,
+    private val blankThresholdPct: Int = 15,
 ) {
+
+    /** One scene: a frame, and the window of video it owns. */
+    data class SceneRef(
+        val frameIndex: Int,
+        val windowStartMs: Long,
+        val windowEndMs: Long,
+    )
 
     /**
      * Frames below this many bytes are treated as near-blank.
@@ -52,24 +60,15 @@ class Episode(
      * of the test episode is a **580 byte** JPEG against a 12,896 byte mean — it
      * quantises to a single colour and is dead air on a watch face.
      *
-     * The Pebble build could only discover this *after* fetching and decoding a
-     * frame, then had to fetch another. Judging by compressed size instead means
-     * blank frames are dropped straight from the index, **before any network
-     * happens at all** — a strictly better trick the earlier design had no way to
-     * use, since it needed the decoded palette to decide.
+     * Judging by compressed size means blank frames are dropped straight from the
+     * index, **before any network happens at all**.
      *
      * The threshold is relative to this episode's own median rather than a fixed
      * number, so it travels to content with different encoding settings.
      */
     val blankThresholdBytes: Int = if (index.isEmpty()) 0 else {
         // Mean of the two middle values for an even-length list, NOT
-        // sorted[size / 2]. This used to take the upper middle, which differs
-        // from the Pebble build and the Timeline Tuner by half the gap between
-        // the two central frames — 250 bytes of median, 37 bytes of threshold,
-        // on the conformance fixture. No frame happened to sit in that band, so
-        // nothing visibly broke; a frame around 12% of median eventually will,
-        // and one platform would drop it while another kept it. See
-        // trickplayer-knowledge findings/F-034.
+        // sorted[size / 2] — see trickplayer-knowledge findings/F-034.
         val sorted = index.map { it.length }.sorted()
         val mid = sorted.size / 2
         val median = if (sorted.size % 2 == 0) {
@@ -77,44 +76,75 @@ class Episode(
         } else {
             sorted[mid].toDouble()
         }
-        (median * 0.15).toInt()
+        (median * blankThresholdPct / 100.0).toInt()
     }
 
     /**
-     * The frames actually worth showing, blanks and silent windows already
-     * removed. Scene N is `scenes[N]`, and that is the whole mapping.
+     * Byte-identical-to-an-earlier-frame, inferred from **declared length alone**.
      *
-     * The obvious design — keep every picked frame and step forward past a bad
-     * one at read time — is what both earlier versions of this did, and it is
-     * quietly broken. Skipping forward does not pass over a frame, it *steals* a
-     * later scene's frame, and that scene then serves it again:
+     * Hashing the bytes is what F-001 specifies and it costs a full-track
+     * read — measured at 1815 of 1815 frames, 10.48 MB, 10.2 s on the episode
+     * that finding cites. The length heuristic found 99.7% of duplicates across
+     * three real episodes with one false positive in 6,149 frames, for no
+     * network at all. See findings/F-036.
      *
-     *     scene 4 -> frame 30 (skipped 2)
-     *     scene 5 -> frame 35 (skipped 2)
-     *     scene 6 -> frame 30      <-- scene 4 already showed this
-     *     scene 7 -> frame 35      <-- and scene 5 showed this
-     *
-     * Observed on the real test episode. Avoiding just the previous scene's frame
-     * does not help, because the collision is with a scene two or more back.
-     * Filtering once, up front, removes the whole class of bug: every scene maps
-     * to a distinct frame by construction, nothing is skipped at read time, and
-     * the scene count is honest.
-     *
-     * It is also free — both tests are answerable from the parsed index and the
-     * cue list, so this costs no network at all.
-     *
-     * NB: this must be declared **after** [blankThresholdBytes]. Kotlin
-     * initialises properties in declaration order, and with this block above it
-     * the threshold is still 0 when the filter runs, so nothing is ever judged
-     * blank. That failure is completely silent; a unit test caught it.
+     * Each frame is compared to the current run's **representative**, not to its
+     * immediate neighbour, so a run survives a frame that merely happens to match
+     * the one before it.
      */
-    val scenes: List<Int> = run {
-        val usable = picked.filter {
-            !isNearBlank(it) && (!skipSilent || cuesFor(it).isNotEmpty())
+    val duplicateFlags: List<Boolean> = run {
+        val dup = MutableList(index.size) { false }
+        var rep = 0
+        for (i in 1 until index.size) {
+            if (index[i].length == index[rep].length) dup[i] = true else rep = i
         }
-        // If the filters would gut the episode — an item with no subtitles, or
-        // one whose frames are all tiny — a repetitive face beats an empty one.
-        if (usable.size >= MIN_USABLE_SCENES) usable else picked
+        dup
+    }
+
+    /**
+     * The scenes actually worth showing — blanks, duplicates and silent windows
+     * already removed. Scene N is `scenes[N]`, and that is the whole mapping.
+     *
+     * Binning is by the source's **own frame timings**, not a synthetic interval:
+     * every surviving frame is its own scene, so scenes follow the content's real
+     * cuts. A scene's window runs to the **next kept frame**, so the time of a
+     * skipped duplicate folds into the scene that replaces it and its cues come
+     * with it rather than disappearing.
+     *
+     * Filtering happens once, up front. Stepping past a bad frame at read time
+     * does not pass over it — it steals a *later* scene's frame, and that scene
+     * then serves it again. Filtering once removes the whole class of bug: every
+     * scene maps to a distinct frame by construction.
+     *
+     * NB: this must be declared **after** [blankThresholdBytes] and
+     * [duplicateFlags]. Kotlin initialises properties in declaration order, and
+     * with this block above them the threshold is still 0 when the filter runs,
+     * so nothing is ever judged blank. That failure is completely silent; a unit
+     * test caught it.
+     */
+    val scenes: List<SceneRef> = run {
+        val all = index.indices.toList()
+        val target = minOf(MIN_USABLE_SCENES, all.size)
+
+        val notBlank = all.filter { !isNearBlank(it) }
+        var kept = notBlank.filter { !duplicateFlags[it] }
+        // Dropping duplicates must not gut a static episode, nor must blank
+        // filtering: a repetitive face beats an empty one.
+        if (kept.size < target) kept = notBlank
+        if (kept.size < target) kept = all
+
+        val built = kept.mapIndexed { i, frameIndex ->
+            SceneRef(
+                frameIndex = frameIndex,
+                windowStartMs = index[frameIndex].tsMs,
+                windowEndMs = if (i + 1 < kept.size) index[kept[i + 1]].tsMs else durationMs,
+            )
+        }
+
+        if (!skipSilent) built else {
+            val withCues = built.filter { cuesFor(it).isNotEmpty() }
+            if (withCues.size >= target) withCues else built
+        }
     }
 
     val sceneCount: Int get() = scenes.size
@@ -122,14 +152,12 @@ class Episode(
     fun isNearBlank(frameIndex: Int): Boolean =
         index[frameIndex].length < blankThresholdBytes
 
-    /** The cues belonging to the window that starts at [frameIndex]. */
-    fun cuesFor(frameIndex: Int): List<String> {
-        val from = index[frameIndex].tsMs
-        return Srt.cuesInWindow(cues, from, from + intervalMs)
+    /** The cues belonging to this scene's window. */
+    fun cuesFor(scene: SceneRef): List<String> =
+        Srt.cuesInWindow(cues, scene.windowStartMs, scene.windowEndMs)
             // The face wraps text itself; a newline inside a single cue would
             // fight that, so flatten to spaces and keep cues as the unit.
             .map { it.replace('\n', ' ') }
-    }
 
     private companion object {
         /** Below this, the filters are doing more harm than good. */

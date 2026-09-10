@@ -112,14 +112,18 @@ class EpisodeRepository private constructor(
         }
         val cues = if (srt.isEmpty()) emptyList() else Srt.parse(srt)
 
+        // Scenes come from the source's own frame timings, not a fixed
+        // interval — every surviving frame is its own scene, duplicates are
+        // dropped by declared length, and silent windows go last (F-001,
+        // F-036). No interval to choose any more.
         val ep = Episode(
             index = index,
-            picked = Timeline.pickFrames(index, config.intervalMs),
             cues = cues,
-            intervalMs = config.intervalMs,
+            durationMs = index.lastOrNull()?.tsMs ?: 0L,
             skipSilent = config.skipSilent,
         )
-        Log.i(TAG, "episode ready: ${ep.sceneCount} scenes, ${cues.size} cues")
+        Log.i(TAG, "episode ready: ${ep.sceneCount} scenes of ${index.size} frames " +
+            "(${ep.duplicateFlags.count { it }} duplicate), ${cues.size} cues")
         episode = ep
         return ep
     }
@@ -149,7 +153,7 @@ class EpisodeRepository private constructor(
             )
         } ?: return null
 
-        val cues = ep.cuesFor(r.frameIndex).ifEmpty { listOf(fmtTime(ent.tsMs)) }
+        val cues = ep.cuesFor(r.scene).ifEmpty { listOf(fmtTime(ent.tsMs)) }
         Log.i(TAG, "scene $sceneIndex -> frame ${r.frameIndex} @${ent.tsMs / 1000}s, " +
             "${jpeg.size} B, ${cues.size} cues")
 

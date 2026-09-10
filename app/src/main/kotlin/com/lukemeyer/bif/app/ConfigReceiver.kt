@@ -53,12 +53,10 @@ class ConfigReceiver : BroadcastReceiver() {
             timelineRef = timelineRef,
             subtitleRef = intent.getStringExtra("subtitleRef").orEmpty(),
             title = intent.getStringExtra("title").orEmpty(),
-            intervalMs = intent.getLongExtra("intervalMs", 10_000L),
             skipSilent = intent.getBooleanExtra("skipSilent", true),
         )
         // Never log the token.
-        Log.i(TAG, "configured part $timelineRef, interval " +
-            "${intent.getLongExtra("intervalMs", 10_000L)} ms; starting prefetch")
+        Log.i(TAG, "configured part $timelineRef; starting prefetch")
 
         // Optional tuning knob: --el dwellMs 5000 to watch the raw poll cadence.
         if (intent.hasExtra("dwellMs")) {

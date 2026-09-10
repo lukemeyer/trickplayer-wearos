@@ -219,15 +219,64 @@ class CorpusConformanceTest {
     // --------------------------------------------------------------- scene
 
     @Test
-    @DisplayName("scene: NOT YET APPLICABLE — this build has neither corpus scene policy")
+    @DisplayName("scene: the adopted policy — native timings, length dedup, empty drop")
     fun sceneSelection() {
-        assumeTrue(
-            false,
-            "The corpus scene cases are F-001's native-timing policy and the " +
-                "tuner's nearest-to-midpoint interval policy. This build does " +
-                "neither: Timeline.pickFrames takes the first frame at or after " +
-                "each interval boundary. Adopting F-001 is PLAN.md Phase 2.",
+        val fx = obj("scene/episode.frames.json")
+        val cx = obj("scene/episode.cues.json")
+        val want = obj("scene/episode.expected.json")["cases"]!!
+            .jsonObject["adopted"]!!.jsonObject["expect"]!!.jsonObject
+
+        val index = fx["frames"]!!.jsonArray.map {
+            val f = it.jsonObject
+            Timeline.FrameRef(
+                tsMs = f["tsMs"]!!.jsonPrimitive.long,
+                offset = f["offset"]!!.jsonPrimitive.int,
+                length = f["length"]!!.jsonPrimitive.int,
+            )
+        }
+        val cues = cx["cues"]!!.jsonArray.map {
+            val c = it.jsonObject
+            Srt.Cue(c["startMs"]!!.jsonPrimitive.long, c["endMs"]!!.jsonPrimitive.long, "x")
+        }
+        val ep = Episode(
+            index = index,
+            cues = cues,
+            durationMs = fx["durationMs"]!!.jsonPrimitive.long,
+            skipSilent = true,
         )
+
+        assertEquals(want["sceneCount"]!!.jsonPrimitive.int, ep.sceneCount, "sceneCount")
+
+        val seen = LinkedHashSet<Int>()
+        var bytes = 0L
+        var cueTotal = 0
+        for (sc in ep.scenes) {
+            val f = index[sc.frameIndex]
+            if (seen.add(f.offset)) bytes += f.length
+            cueTotal += cues.count { it.startMs >= sc.windowStartMs && it.startMs < sc.windowEndMs }
+        }
+        assertEquals(want["sceneBytes"]!!.jsonPrimitive.long, bytes, "sceneBytes")
+        assertEquals(
+            want["uniqueFramesShipped"]!!.jsonPrimitive.int, seen.size, "uniqueFramesShipped")
+        assertEquals(
+            want["avgCuesPerScene"]!!.jsonPrimitive.double,
+            (cueTotal.toDouble() / ep.sceneCount), 0.0001, "avgCuesPerScene")
+
+        // Duplicate detection must agree with the fixture's hashed ground
+        // truth, so the heuristic is checked against reality rather than
+        // against itself (F-036).
+        val truth = fx["frames"]!!.jsonArray.map {
+            it.jsonObject["duplicateOfIndex"] !is kotlinx.serialization.json.JsonNull &&
+                it.jsonObject["duplicateOfIndex"] != null
+        }
+        var falsePositives = 0
+        var missed = 0
+        ep.duplicateFlags.forEachIndexed { i, d ->
+            if (d && !truth[i]) falsePositives++
+            if (!d && truth[i]) missed++
+        }
+        assertEquals(0, falsePositives, "length heuristic flagged a distinct frame")
+        assertEquals(0, missed, "length heuristic missed a real duplicate")
     }
 
     @Test
@@ -247,9 +296,8 @@ class CorpusConformanceTest {
             }
             val ep = Episode(
                 index = index,
-                picked = index.indices.toList(),
                 cues = emptyList(),
-                intervalMs = 10_000,
+                durationMs = index.size * 2000L,
                 skipSilent = false,
             )
             // Assert the threshold directly rather than recovering the median

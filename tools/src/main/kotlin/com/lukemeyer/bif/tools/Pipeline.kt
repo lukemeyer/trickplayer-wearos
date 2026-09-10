@@ -92,23 +92,25 @@ fun main() {
     }
 
     // -------------------------------------------------------------- scenes
-    val intervalMs = 10_000L
-    val ep = Episode(index, Timeline.pickFrames(index, intervalMs), cues, intervalMs)
-    say("scene interval", "$intervalMs ms")
-    say("scenes", ep.sceneCount.toString())
-
-    say("picked frames", ep.picked.size.toString())
+    val ep = Episode(index, cues, durationMs = index.last().tsMs)
+    say("binning", "the source's own frame timings (F-001), not a fixed interval")
+    say("frames in index", index.size.toString())
     say("blank threshold", "${ep.blankThresholdBytes} B (15% of median)")
-    say("near-blank dropped", ep.picked.count { ep.isNearBlank(it) }.toString())
-    say("silent dropped", ep.picked.count { !ep.isNearBlank(it) && ep.cuesFor(it).isEmpty() }.toString())
+    say("near-blank", index.indices.count { ep.isNearBlank(it) }.toString())
+    say("duplicates (by length)", ep.duplicateFlags.count { it }.toString() +
+        "   ${"%.1f".format(ep.duplicateFlags.count { it } * 100.0 / index.size)}% — F-036, no bytes fetched")
     say("scenes kept", ep.sceneCount.toString())
 
     val perScene = ep.scenes.map { ep.cuesFor(it).size }
     say("cues per scene", "avg %.2f".format(perScene.average()) +
         "   (this is the number the whole design rests on)")
-    val distinct = ep.scenes.toSet().size
+    val distinct = ep.scenes.map { it.frameIndex }.toSet().size
     say("distinct frames", "$distinct of ${ep.sceneCount}" +
         if (distinct == ep.sceneCount) "   no two scenes share a frame" else "   *** COLLISION ***")
+    val sceneBytes = ep.scenes.sumOf { index[it.frameIndex].length.toLong() }
+    val trackBytes = index.sumOf { it.length.toLong() }
+    say("bytes to ship", "$sceneBytes of $trackBytes" +
+        "   ${"%.0f".format(sceneBytes * 100.0 / trackBytes)}% of the track")
 
     // Resolve and actually fetch a handful, end to end.
     println()
@@ -120,7 +122,7 @@ fun main() {
         val t2 = System.currentTimeMillis()
         val jpeg = plex.getRange(timelineUrl, ent.offset.toLong(), (ent.offset + ent.length - 1).toLong())
         fetched += jpeg.size
-        val cueList = ep.cuesFor(r.frameIndex)
+        val cueList = ep.cuesFor(r.scene)
         println("    scene %-2d -> frame %-4d @%5ds  %6d B  %d cues  %dms".format(
             i, r.frameIndex, ent.tsMs / 1000, jpeg.size, cueList.size,
             System.currentTimeMillis() - t2))

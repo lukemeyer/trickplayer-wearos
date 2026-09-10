@@ -35,7 +35,6 @@ class Settings(context: Context) {
         val timelineRef: Long,
         val subtitleRef: String,
         val title: String,
-        val intervalMs: Long,
         val skipSilent: Boolean,
     ) {
         /**
@@ -43,7 +42,7 @@ class Settings(context: Context) {
          * changes this, so stale scenes can never be served for the new one —
          * the same job `cache.setProfile(timelineRef, w, h, depth)` did on Pebble.
          */
-        val profile: String get() = "$timelineRef.$intervalMs"
+        val profile: String get() = "$timelineRef.$SCENE_POLICY"
     }
 
     var episode: Episode?
@@ -61,7 +60,6 @@ class Settings(context: Context) {
                     ?.takeIf { it.isNotEmpty() } ?: listOf(server),
                 subtitleRef = prefs.getString(K_SUBKEY, "").orEmpty(),
                 title = prefs.getString(K_TITLE, "").orEmpty(),
-                intervalMs = prefs.getLong(K_INTERVAL, 10_000L),
                 skipSilent = prefs.getBoolean(K_SKIP_SILENT, true),
             )
         }
@@ -76,7 +74,6 @@ class Settings(context: Context) {
                     putLong(K_PART, v.timelineRef)
                     putString(K_SUBKEY, v.subtitleRef)
                     putString(K_TITLE, v.title)
-                    putLong(K_INTERVAL, v.intervalMs)
                     putBoolean(K_SKIP_SILENT, v.skipSilent)
                     // A new episode invalidates the position, not just the cache.
                     putInt(K_SCENE, 0)
@@ -219,13 +216,25 @@ class Settings(context: Context) {
         }
 
     private companion object {
+        /**
+         * Part of the cache profile, so a change to the SCENE SELECTION POLICY
+         * invalidates cached scenes rather than serving them under a mapping
+         * that no longer holds.
+         *
+         * The profile used to key on the scene interval, which worked only
+         * while an interval was what decided scene -> frame. Adopting F-001
+         * removed the interval entirely: scene N now resolves to a different
+         * frame than it did, so every pre-existing entry is wrong. Bumping
+         * this is what makes that safe.
+         */
+        const val SCENE_POLICY = "f001"
+
         const val K_SERVER = "server"
         const val K_ROUTES = "routes"
         const val K_TOKEN = "token"
         const val K_PART = "partId"
         const val K_SUBKEY = "subKey"
         const val K_TITLE = "title"
-        const val K_INTERVAL = "intervalMs"
         const val K_SKIP_SILENT = "skipSilent"
         const val K_SCENE = "scene"
         const val K_CUE = "cue"
