@@ -4,6 +4,7 @@ import com.lukemeyer.bif.core.subs.Srt
 import com.lukemeyer.bif.core.scene.Episode
 import com.lukemeyer.bif.core.timeline.Timeline
 import kotlinx.serialization.json.*
+import kotlinx.serialization.json.contentOrNull
 import org.junit.jupiter.api.Assertions.*
 import org.junit.jupiter.api.Assumptions.assumeTrue
 import org.junit.jupiter.api.DisplayName
@@ -157,9 +158,15 @@ class CorpusConformanceTest {
     @DisplayName("real: a captured trick-play index from licence-free content")
     fun realCapture() {
         val dir = File(corpus, "real")
+        // Plex captures only: a Jellyfin fixture is tile sheets with no .bif,
+        // and this build has no Jellyfin provider to check it with yet.
         val names = (dir.listFiles() ?: emptyArray())
             .filter { it.name.endsWith(".expected.json") }
             .map { it.name.removeSuffix(".expected.json") }
+            .filter { n ->
+                val src = obj("real/$n.expected.json")["source"]?.jsonObject
+                src?.get("provider")?.jsonPrimitive?.contentOrNull != "jellyfin"
+            }
         // corpus/real/ is a slot and may be empty; degrade cleanly.
         assumeTrue(
             names.isNotEmpty(),
