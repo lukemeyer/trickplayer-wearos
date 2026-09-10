@@ -6,6 +6,7 @@ import android.util.Log
 import androidx.wear.watchface.complications.datasource.ComplicationDataSourceUpdateRequester
 import com.lukemeyer.bif.data.EpisodeRepository
 import com.lukemeyer.bif.data.ScenePrefetchWorker
+import com.lukemeyer.bif.core.scene.Advance
 import com.lukemeyer.bif.core.scene.Cursor
 import com.lukemeyer.bif.data.SceneCache
 import com.lukemeyer.bif.data.Settings
@@ -57,13 +58,17 @@ object SceneState {
      * measured 3.22 cues per scene, roughly three advances in four change only
      * the text and touch neither the network nor the cache.
      *
+     * @param mode what this trigger is configured to do. [Advance.NOTHING]
+     *   returns without moving, which is the honest implementation of "do
+     *   nothing" — not an advance that is then discarded.
      * @param force a tap is explicit intent and always moves. A glance is not,
      *   and goes through the dwell gate — both so a wrist-raise does not skip
      *   scenes, and because advancing triggers a complication refresh, which is
      *   itself glance-shaped and would otherwise loop forever.
      * @return true if anything moved.
      */
-    fun advance(ctx: Context, force: Boolean): Boolean {
+    fun advance(ctx: Context, force: Boolean, mode: Advance = Advance.NEXT_SUBTITLE): Boolean {
+        if (mode == Advance.NOTHING) return false
         // Catch up with whatever the burst on the face already played, or this
         // moves forward from a position that is several steps stale — which on
         // screen looks like the face jumping backwards.
@@ -91,14 +96,17 @@ object SceneState {
         // position instead is what the Pebble build did when its ring ran dry,
         // and for the same reason: a face that pauses is fine, a face that
         // breaks is not.
-        val crossing = cursor.cueIndex + 1 >= maxOf(cues.size, 1)
+        // Under NEXT_SCENE every advance crosses, because unread cues in this
+        // scene are exactly what it skips.
+        val crossing = mode == Advance.NEXT_SCENE ||
+            cursor.cueIndex + 1 >= maxOf(cues.size, 1)
         if (crossing && !cache.has(cursor.sceneIndex + 1)) {
             Log.i(TAG, "holding at scene ${cursor.sceneIndex}: next not cached yet")
             ScenePrefetchWorker.enqueue(ctx, cursor.sceneIndex)
             return false
         }
 
-        return when (val r = cursor.advance(now, maxOf(cues.size, 1), force)) {
+        return when (val r = cursor.advance(now, maxOf(cues.size, 1), mode, force)) {
             is Cursor.Result.Throttled -> {
                 Log.i(TAG, "advance throttled (glance within dwell)")
                 false

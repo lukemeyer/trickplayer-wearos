@@ -39,7 +39,8 @@ class ConfigActivity : ComponentActivity() {
             step is ConfigViewModel.Step.Linking ||
             step == ConfigViewModel.Step.Browse ||
             step == ConfigViewModel.Step.Servers ||
-            step == ConfigViewModel.Step.AddAddress
+            step == ConfigViewModel.Step.AddAddress ||
+            step == ConfigViewModel.Step.Options
         if (nested) vm.back() else @Suppress("DEPRECATION") super.onBackPressed()
     }
 }

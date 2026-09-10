@@ -1,6 +1,7 @@
 package com.lukemeyer.bif.data
 
 import android.content.Context
+import com.lukemeyer.bif.core.scene.Advance
 import com.lukemeyer.bif.core.scene.Cursor
 
 /**
@@ -76,12 +77,18 @@ class Settings(context: Context) {
          * changes this, so stale scenes can never be served for the new one —
          * the same job `cache.setProfile(timelineRef, w, h, depth)` did on Pebble.
          */
-        val profile: String get() =
-            if (provider == Provider.JELLYFIN && trickplay != null) {
-                "jf-${trickplay.itemId}.${trickplay.width}.$SCENE_POLICY"
+        val profile: String get() {
+            // skipSilent is part of the profile because it changes the SCENE
+            // LIST, not just what is shown: with it off, scene 93 resolves to a
+            // different frame. Cached scenes from the other setting are not
+            // stale, they are wrong.
+            val policy = "$SCENE_POLICY.${if (skipSilent) "s1" else "s0"}"
+            return if (provider == Provider.JELLYFIN && trickplay != null) {
+                "jf-${trickplay.itemId}.${trickplay.width}.$policy"
             } else {
-                "$timelineRef.$SCENE_POLICY"
+                "$timelineRef.$policy"
             }
+        }
     }
 
     var episode: Episode?
@@ -165,6 +172,32 @@ class Settings(context: Context) {
                 }
             }.apply()
         }
+
+    /**
+     * What a wrist raise does, and what a tap does.
+     *
+     * Two controls rather than one because the triggers are genuinely
+     * independent here — a wrist raise is ambient intent, a complication tap is
+     * deliberate — and different answers to each are reasonable: *nothing* on
+     * wake so the episode does not drift while you check the time, *next scene*
+     * on tap when you actually want it. Pebble gets one row because a watch face
+     * there cannot receive touch at all (UI.md §4.2).
+     *
+     * Global rather than per-episode: it is how you like the face to behave, not
+     * a property of what is playing.
+     */
+    var onWake: Advance
+        get() = readAdvance(K_ON_WAKE, Advance.NEXT_SUBTITLE)
+        set(v) = prefs.edit().putString(K_ON_WAKE, v.name).apply()
+
+    var onTap: Advance
+        get() = readAdvance(K_ON_TAP, Advance.NEXT_SCENE)
+        set(v) = prefs.edit().putString(K_ON_TAP, v.name).apply()
+
+    private fun readAdvance(key: String, fallback: Advance): Advance =
+        prefs.getString(key, null)
+            ?.let { runCatching { Advance.valueOf(it) }.getOrNull() }
+            ?: fallback
 
     /**
      * Resume position. Persisted on every advance so the face picks up where it
@@ -400,6 +433,8 @@ class Settings(context: Context) {
         // New keys only. The ones above are frozen: renaming a stored key
         // silently orphans an existing watch's configuration.
         const val K_PROVIDER = "provider"
+        const val K_ON_WAKE = "onWake"
+        const val K_ON_TAP = "onTap"
         const val K_SOURCES = "sources"
         const val K_LAST_SOURCE = "lastSourceId"
         const val K_PENDING_AUTH = "pendingAuth"

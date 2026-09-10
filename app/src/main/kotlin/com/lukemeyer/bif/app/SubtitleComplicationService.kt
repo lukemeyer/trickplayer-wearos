@@ -1,6 +1,7 @@
 package com.lukemeyer.bif.app
 
 import android.app.PendingIntent
+import com.lukemeyer.bif.core.scene.Advance
 import android.content.Intent
 import android.util.Log
 import androidx.wear.watchface.complications.data.ComplicationData
@@ -85,12 +86,22 @@ class SubtitleComplicationService : ComplicationDataSourceService() {
         }
     }
 
-    private fun advanceIntent(): PendingIntent = PendingIntent.getBroadcast(
-        this,
-        0,
-        Intent(AdvanceReceiver.ACTION).setPackage(packageName),
-        PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE,
-    )
+    /**
+     * Null when "On tap" is *do nothing*, so the complication has **no tap
+     * target at all** rather than one that swallows the tap. A control that
+     * says nothing happens should leave nothing to press.
+     */
+    private fun advanceIntent(): PendingIntent? {
+        if (SceneState.settings(this).onTap == Advance.NOTHING) {
+            return null
+        }
+        return PendingIntent.getBroadcast(
+            this,
+            0,
+            Intent(AdvanceReceiver.ACTION).setPackage(packageName),
+            PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE,
+        )
+    }
 
     companion object { private const val TAG = "BifSubtitle" }
 }

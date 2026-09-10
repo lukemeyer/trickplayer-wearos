@@ -21,12 +21,16 @@ import androidx.wear.compose.foundation.lazy.items
 import androidx.wear.compose.foundation.lazy.rememberScalingLazyListState
 import androidx.wear.compose.material.Chip
 import androidx.wear.compose.material.ChipDefaults
+import androidx.wear.compose.material.Switch
+import androidx.wear.compose.material.ToggleChip
+import androidx.wear.compose.material.ToggleChipDefaults
 import androidx.wear.compose.material.CircularProgressIndicator
 import androidx.wear.compose.material.ListHeader
 import androidx.wear.compose.material.MaterialTheme
 import androidx.wear.compose.material.Text
 import androidx.wear.compose.material.TimeText
 import androidx.wear.input.RemoteInputIntentHelper
+import com.lukemeyer.bif.core.scene.Advance
 import com.lukemeyer.bif.core.source.BrowseItem
 import com.lukemeyer.bif.core.source.Container
 import com.lukemeyer.bif.core.source.Playable
@@ -53,6 +57,13 @@ fun ConfigScreen(state: ConfigViewModel.State, vm: ConfigViewModel) {
     Box(Modifier.fillMaxSize()) {
         TimeText()
         when (val step = state.step) {
+            ConfigViewModel.Step.Loading -> Centered {
+                Text(
+                    "Connecting…",
+                    style = MaterialTheme.typography.caption1,
+                    color = MaterialTheme.colors.onSurfaceVariant,
+                )
+            }
             ConfigViewModel.Step.Sources -> Sources(state, vm)
             ConfigViewModel.Step.AddProvider -> AddProvider(state, vm)
             ConfigViewModel.Step.AddAddress -> AddAddress(vm)
@@ -61,6 +72,7 @@ fun ConfigScreen(state: ConfigViewModel.State, vm: ConfigViewModel) {
             ConfigViewModel.Step.Browse -> Browse(state, vm)
             is ConfigViewModel.Step.Items -> Items(step.title, state, vm)
             is ConfigViewModel.Step.Done -> Done(step.title, vm)
+            ConfigViewModel.Step.Options -> Options(state.options, vm)
         }
         if (state.busy) {
             Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
@@ -116,7 +128,7 @@ private fun ChipList(
  */
 @Composable
 private fun Sources(state: ConfigViewModel.State, vm: ConfigViewModel) =
-    ChipList("Servers") {
+    ChipList("Servers", state.error) {
         items(state.sources) { rec: Map<String, String> ->
             Chip(
                 label = { Text(rec["name"] ?: rec["server"].orEmpty(), maxLines = 1) },
@@ -300,6 +312,14 @@ private fun Browse(state: ConfigViewModel.State, vm: ConfigViewModel) =
                 modifier = Modifier.fillMaxWidth(),
             )
         }
+        item {
+            Chip(
+                label = { Text("Options") },
+                onClick = { vm.showOptions() },
+                colors = ChipDefaults.secondaryChipColors(),
+                modifier = Modifier.fillMaxWidth().padding(top = 8.dp),
+            )
+        }
     }
 
 private fun androidx.wear.compose.foundation.lazy.ScalingLazyListScope.itemsIndexed(
@@ -375,4 +395,96 @@ private fun Done(title: String, vm: ConfigViewModel) = Centered {
         onClick = { vm.pickAnother() },
         modifier = Modifier.fillMaxWidth(),
     )
+    Chip(
+        label = { Text("Options") },
+        onClick = { vm.showOptions() },
+        modifier = Modifier.fillMaxWidth().padding(top = 4.dp),
+    )
+}
+
+/**
+ * The three controls this platform gets, and no others.
+ *
+ * **No sliders.** A control that needs a preview to judge does not belong on a
+ * 450 px circle, which is the same reason the picture group and bandwidth are
+ * absent entirely rather than shrunk (UI.md §4.3). What is left is policy, and
+ * policy reads as full-width rows with named choices.
+ */
+@Composable
+private fun Options(options: ConfigViewModel.Options, vm: ConfigViewModel) =
+    ChipList("Options") {
+        item {
+            ToggleChip(
+                checked = options.skipSilent,
+                onCheckedChange = { vm.setSkipSilent(it) },
+                label = { Text("Skip silent scenes", maxLines = 2) },
+                // "Subtitles" rather than "dialogue" because the filter keys on
+                // CUES: a scene with unsubtitled speech is skipped too, and a
+                // name promising otherwise would lie about the mechanism.
+                secondaryLabel = {
+                    Text(
+                        when (options.hasCues) {
+                            null -> "scenes with no subtitles"
+                            // On an item with no subtitle track this does
+                            // nothing, because the filter floors rather than
+                            // emptying the episode (F-009).
+                            false -> "no subtitles here — no effect"
+                            true -> "scenes with no subtitles"
+                        },
+                        maxLines = 2,
+                    )
+                },
+                toggleControl = {
+                    Switch(checked = options.skipSilent)
+                },
+                colors = ToggleChipDefaults.toggleChipColors(),
+                modifier = Modifier.fillMaxWidth(),
+            )
+        }
+
+        item { SectionLabel("On wake") }
+        items(Advance.entries.toList()) { mode: Advance ->
+            ChoiceRow(mode, options.onWake) { vm.setOnWake(mode) }
+        }
+
+        item { SectionLabel("On tap") }
+        items(Advance.entries.toList()) { mode: Advance ->
+            ChoiceRow(mode, options.onTap) { vm.setOnTap(mode) }
+        }
+
+        item {
+            Text(
+                // The one behaviour worth captioning rather than hiding.
+                "\"Next subtitle\" rolls into the next scene when this one runs " +
+                    "out of them.",
+                style = MaterialTheme.typography.caption3,
+                textAlign = TextAlign.Center,
+                color = MaterialTheme.colors.onSurfaceVariant,
+                modifier = Modifier.padding(horizontal = 16.dp, vertical = 8.dp),
+            )
+        }
+    }
+
+@Composable
+private fun SectionLabel(text: String) = ListHeader {
+    Text(text, style = MaterialTheme.typography.caption1)
+}
+
+/** Named choices, not a slider over four positions with a number that means nothing. */
+@Composable
+private fun ChoiceRow(mode: Advance, selected: Advance, onClick: () -> Unit) {
+    Chip(
+        label = { Text(mode.label()) },
+        onClick = onClick,
+        colors = if (mode == selected) ChipDefaults.primaryChipColors()
+            else ChipDefaults.secondaryChipColors(),
+        modifier = Modifier.fillMaxWidth(),
+    )
+}
+
+/** Never the implementation: not `SameScene`, not `NewScene` (UI.md §4.1). */
+private fun Advance.label(): String = when (this) {
+    Advance.NOTHING -> "Do nothing"
+    Advance.NEXT_SUBTITLE -> "Next subtitle"
+    Advance.NEXT_SCENE -> "Next scene"
 }

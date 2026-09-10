@@ -253,10 +253,10 @@ class CursorWalkTest {
     @org.junit.jupiter.api.Test
     fun `walks through cues then into the next scene`() {
         org.junit.jupiter.api.Assertions.assertEquals(
-            0 to 2, Cursor.walk(0, 0, 2, cached),
+            0 to 2, Cursor.walk(0, 0, 2, cueCountOf = cached),
         )
         org.junit.jupiter.api.Assertions.assertEquals(
-            1 to 0, Cursor.walk(0, 0, 3, cached),
+            1 to 0, Cursor.walk(0, 0, 3, cueCountOf = cached),
         )
     }
 
@@ -264,7 +264,7 @@ class CursorWalkTest {
     fun `never walks past the last cached scene`() {
         // The exact hardware failure: cache holds 0-15, and a long burst tries
         // to march the cursor to 19.
-        val (scene, cue) = Cursor.walk(15, 0, 40, cached)
+        val (scene, cue) = Cursor.walk(15, 0, 40, cueCountOf = cached)
         org.junit.jupiter.api.Assertions.assertEquals(15, scene)
         org.junit.jupiter.api.Assertions.assertEquals(2, cue, "should rest on the last cue it has")
     }
@@ -272,7 +272,7 @@ class CursorWalkTest {
     @org.junit.jupiter.api.Test
     fun `a cursor already past the cache does not run further`() {
         org.junit.jupiter.api.Assertions.assertEquals(
-            19 to 0, Cursor.walk(19, 0, 30, cached),
+            19 to 0, Cursor.walk(19, 0, 30, cueCountOf = cached),
         )
     }
 
@@ -282,7 +282,40 @@ class CursorWalkTest {
         // not read as "zero cues, therefore advance".
         val onlyOne: (Int) -> Int? = { if (it == 0) 2 else null }
         org.junit.jupiter.api.Assertions.assertEquals(
-            0 to 1, Cursor.walk(0, 0, 99, onlyOne),
+            0 to 1, Cursor.walk(0, 0, 99, cueCountOf = onlyOne),
+        )
+    }
+
+    @org.junit.jupiter.api.Test
+    fun `next scene skips the unread cues, next subtitle does not`() {
+        // Same start, same number of steps, two different settings: three
+        // scenes forward against one cue forward. That gap IS the control
+        // (UI.md 4.2) — and the cheap one is the default.
+        org.junit.jupiter.api.Assertions.assertEquals(
+            3 to 0,
+            Cursor.walk(0, 0, 3, Advance.NEXT_SCENE, cueCountOf = cached),
+        )
+        org.junit.jupiter.api.Assertions.assertEquals(
+            1 to 0,
+            Cursor.walk(0, 0, 3, Advance.NEXT_SUBTITLE, cueCountOf = cached),
+        )
+    }
+
+    @org.junit.jupiter.api.Test
+    fun `do nothing moves nothing, however many steps elapsed`() {
+        org.junit.jupiter.api.Assertions.assertEquals(
+            7 to 1,
+            Cursor.walk(7, 1, 50, Advance.NOTHING, cueCountOf = cached),
+        )
+    }
+
+    @org.junit.jupiter.api.Test
+    fun `next scene still stops at the edge of the cache`() {
+        // The failure this walk exists to prevent does not get easier because
+        // the user picked a different mode: 16 was never fetched.
+        org.junit.jupiter.api.Assertions.assertEquals(
+            15 to 0,
+            Cursor.walk(10, 0, 20, Advance.NEXT_SCENE, cueCountOf = cached),
         )
     }
 }

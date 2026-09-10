@@ -2,6 +2,7 @@ package com.lukemeyer.bif.app
 
 import android.content.Context
 import android.util.Log
+import com.lukemeyer.bif.core.scene.Advance
 import com.lukemeyer.bif.core.scene.Cursor
 import com.lukemeyer.bif.data.SceneCache
 import com.lukemeyer.bif.data.Settings
@@ -23,6 +24,15 @@ import com.lukemeyer.bif.data.Settings
  * The burst is sized to the screen timeout, not to how far ahead we could plan:
  * the watch sleeps after about fifteen seconds, so anything longer is built,
  * pushed across a Binder, and never seen.
+ *
+ * **This burst is what "On wake" configures.** The setting reads as a single
+ * choice about a single wrist raise, and on the other two platforms it is one;
+ * here a wake produces no request at all (measured zero across five cycles), so
+ * what actually happens is the face playing a burst on its own. The three
+ * choices map onto that honestly: [Advance.NOTHING] freezes the burst to one
+ * step, [Advance.NEXT_SUBTITLE] walks the cues, [Advance.NEXT_SCENE] walks the
+ * scenes. What the user asked for — how far the episode moves while they are
+ * looking at it — is what they get.
  */
 object SceneTimeline {
 
@@ -52,8 +62,9 @@ object SceneTimeline {
         val cache = SceneCache(ctx, cfg.profile)
         val step = s.timelineStepMs.coerceAtLeast(1000)
         val horizon = s.timelineHorizonMs.coerceAtLeast(step)
+        val mode = s.onWake
 
-        consumePrevious(s, cache, nowMs, step)
+        consumePrevious(s, cache, nowMs, step, mode)
 
         var scene = s.sceneIndex
         var cue = s.cueIndex
@@ -75,7 +86,19 @@ object SceneTimeline {
             )
             t += step
 
-            if (cue + 1 < cues.size) {
+            // "Do nothing" means one entry covering the whole horizon: the face
+            // holds this scene until something else moves it. Building a burst
+            // and then ignoring it would still march the cursor on the next
+            // request, which is the opposite of what was asked for.
+            if (mode == Advance.NOTHING) {
+                val only = steps[0]
+                return listOf(only.copy(toMs = end)).also {
+                    s.timelineStartMs = 0L
+                    Log.i(TAG, "on-wake is 'do nothing': holding scene ${only.sceneIndex}")
+                }
+            }
+
+            if (mode == Advance.NEXT_SUBTITLE && cue + 1 < cues.size) {
                 cue++
             } else {
                 scene++
@@ -101,14 +124,27 @@ object SceneTimeline {
     fun consume(ctx: Context, nowMs: Long = System.currentTimeMillis()) {
         val s = Settings(ctx)
         val cfg = s.episode ?: return
-        consumePrevious(s, SceneCache(ctx, cfg.profile), nowMs, s.timelineStepMs.coerceAtLeast(1000))
+        consumePrevious(
+            s,
+            SceneCache(ctx, cfg.profile),
+            nowMs,
+            s.timelineStepMs.coerceAtLeast(1000),
+            s.onWake,
+        )
     }
 
     /**
      * Move the cursor forward by the number of steps that genuinely elapsed
      * since the last burst was pushed, capped at the burst's length.
      */
-    private fun consumePrevious(s: Settings, cache: SceneCache, nowMs: Long, stepMs: Long) {
+    private fun consumePrevious(
+        s: Settings,
+        cache: SceneCache,
+        nowMs: Long,
+        stepMs: Long,
+        mode: Advance,
+    ) {
+        if (mode == Advance.NOTHING) return
         val start = s.timelineStartMs
         if (start <= 0L) return
 
@@ -121,7 +157,7 @@ object SceneTimeline {
         // wrong twice on hardware, both times by reading "not cached" as "a
         // scene with no cues" and marching the cursor off the end of the cache,
         // where nothing could bring it back.
-        val (scene, cue) = Cursor.walk(s.sceneIndex, s.cueIndex, played) { idx ->
+        val (scene, cue) = Cursor.walk(s.sceneIndex, s.cueIndex, played, mode) { idx ->
             cache.get(idx)?.cues?.size
         }
 

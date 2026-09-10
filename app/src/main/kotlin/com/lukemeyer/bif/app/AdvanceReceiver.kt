@@ -21,9 +21,11 @@ class AdvanceReceiver : BroadcastReceiver() {
 
     override fun onReceive(context: Context, intent: Intent) {
         if (intent.action != ACTION) return
-        // A tap is explicit intent: always move, dwell gate or not. Requesting
-        // an update then pushes a fresh burst starting from the new position.
-        SceneState.advance(context, force = true)
+        // A tap is explicit intent: always move, dwell gate or not. What it
+        // moves is the user's choice — the complications do not even offer a tap
+        // action when that choice is "do nothing", so this is belt and braces.
+        val mode = SceneState.settings(context).onTap
+        SceneState.advance(context, force = true, mode = mode)
         SceneState.requestUpdate(context)
     }
 

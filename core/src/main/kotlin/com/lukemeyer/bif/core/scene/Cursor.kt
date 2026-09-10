@@ -1,6 +1,41 @@
 package com.lukemeyer.bif.core.scene
 
 /**
+ * What one trigger does to the position.
+ *
+ * These are not three names invented for a settings screen — they are exactly
+ * what the cursor can do, which is why they are the same three on every
+ * platform that offers the choice (UI.md §4.2):
+ *
+ * | | Result | Costs |
+ * |---|---|---|
+ * | [NOTHING] | no advance | nothing |
+ * | [NEXT_SUBTITLE] | [Cursor.Result.SameScene] | **nothing** — new text, same picture, no fetch |
+ * | [NEXT_SCENE] | [Cursor.Result.NewScene] | a frame: fetch, decode, transfer |
+ *
+ * **[NEXT_SUBTITLE] is the cheap one, and that is the point.** At the measured
+ * 3.17 cues per scene roughly three advances in four are text-only, which is the
+ * number the whole design rests on. Offering it as a choice lets someone say
+ * "move me through the dialogue on every glance, but only change the picture
+ * when I ask" — a coherent preference the old "play on wake" wording could not
+ * express at all.
+ */
+enum class Advance {
+    NOTHING,
+
+    /**
+     * One cue, **rolling into the next scene** when this one runs out.
+     *
+     * The roll is not optional: without it the control silently stops working
+     * part-way through every scene.
+     */
+    NEXT_SUBTITLE,
+
+    /** A new picture every time, whatever cues are left unread in this one. */
+    NEXT_SCENE,
+}
+
+/**
  * Where we are in the episode, and the single path by which that moves.
  *
  * Every trigger funnels through [advance] rather than touching the position
@@ -51,13 +86,19 @@ class Cursor(
      *   always move; a glance is not, and must not turn a wrist-raise into a
      *   runaway advance.
      */
-    fun advance(nowMs: Long, cueCount: Int, force: Boolean = false): Result {
+    fun advance(
+        nowMs: Long,
+        cueCount: Int,
+        mode: Advance = Advance.NEXT_SUBTITLE,
+        force: Boolean = false,
+    ): Result {
+        if (mode == Advance.NOTHING) return Result.Throttled
         if (!force && nowMs - lastAdvanceMs < minDwellMs) return Result.Throttled
         lastAdvanceMs = nowMs
 
         // Text-only advance first — this is the cheap, common case. At 3.17 cues
         // per scene roughly three advances in four land here.
-        if (cueIndex + 1 < cueCount) {
+        if (mode == Advance.NEXT_SUBTITLE && cueIndex + 1 < cueCount) {
             cueIndex++
             return Result.SameScene(sceneIndex, cueIndex)
         }
@@ -96,13 +137,15 @@ class Cursor(
             sceneIndex: Int,
             cueIndex: Int,
             steps: Int,
+            mode: Advance = Advance.NEXT_SUBTITLE,
             cueCountOf: (Int) -> Int?,
         ): Pair<Int, Int> {
+            if (mode == Advance.NOTHING) return sceneIndex to cueIndex
             var scene = sceneIndex
             var cue = cueIndex
             repeat(steps) {
                 val cues = cueCountOf(scene) ?: return scene to cue
-                if (cue + 1 < cues) {
+                if (mode == Advance.NEXT_SUBTITLE && cue + 1 < cues) {
                     cue++
                 } else {
                     if (cueCountOf(scene + 1) == null) return scene to cue

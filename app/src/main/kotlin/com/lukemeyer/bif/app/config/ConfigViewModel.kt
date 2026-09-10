@@ -5,6 +5,7 @@ import android.content.Context
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
 import com.lukemeyer.bif.app.SceneState
+import com.lukemeyer.bif.core.scene.Advance
 import com.lukemeyer.bif.core.source.AuthAttempt
 import com.lukemeyer.bif.core.source.AuthPoll
 import com.lukemeyer.bif.core.source.BrowseItem
@@ -46,6 +47,16 @@ import java.util.UUID
 class ConfigViewModel(app: Application) : AndroidViewModel(app) {
 
     sealed interface Step {
+        /**
+         * Reconnecting to a saved source at startup.
+         *
+         * Its own step rather than a spinner over whatever was on screen: the
+         * default is "Add a server", and racing routes takes seconds, so
+         * without this the app opens on an invitation to sign in again — which
+         * someone would reasonably tap.
+         */
+        data object Loading : Step
+
         /** Only ever shown with two or more saved. One source is not a screen. */
         data object Sources : Step
         data object AddProvider : Step
@@ -57,7 +68,26 @@ class ConfigViewModel(app: Application) : AndroidViewModel(app) {
         data object Browse : Step
         data class Items(val title: String) : Step
         data class Done(val title: String) : Step
+        data object Options : Step
     }
+
+    /**
+     * What the options screen shows.
+     *
+     * Three controls, and only three. Wear OS gets the subtitle switch and the
+     * two trigger rows; **no bandwidth and no picture controls**, because
+     * neither is a trade the user can feel here — the "link" is a Binder call on
+     * the same device, and the display decodes at full colour with nothing to
+     * tune (UI.md §4). Nor is there a scene-interval control, on any platform:
+     * F-001 removed the concept.
+     */
+    data class Options(
+        val skipSilent: Boolean = true,
+        val onWake: Advance = Advance.NEXT_SUBTITLE,
+        val onTap: Advance = Advance.NEXT_SCENE,
+        /** Null until an episode is chosen; the switch says so rather than lying. */
+        val hasCues: Boolean? = null,
+    )
 
     data class State(
         val step: Step = Step.AddProvider,
@@ -74,6 +104,7 @@ class ConfigViewModel(app: Application) : AndroidViewModel(app) {
         val playable: List<Pair<BrowseItem, Playable>> = emptyList(),
         val scanned: Int = 0,
         val toScan: Int = 0,
+        val options: Options = Options(),
     )
 
     private val _state = MutableStateFlow(State())
@@ -130,7 +161,13 @@ class ConfigViewModel(app: Application) : AndroidViewModel(app) {
 
     init {
         val saved = settings.sources
-        _state.update { it.copy(sources = saved) }
+        _state.update {
+            it.copy(
+                sources = saved,
+                step = if (saved.isEmpty() && settings.pendingAuth == null) Step.AddProvider
+                    else Step.Loading,
+            )
+        }
         when {
             // A sign-in interrupted by the user walking off to type the code
             // resumes rather than restarting (F-018).
@@ -145,8 +182,17 @@ class ConfigViewModel(app: Application) : AndroidViewModel(app) {
         }
     }
 
-    private fun fail(e: Throwable) =
-        _state.update { it.copy(busy = false, error = e.message ?: e.toString()) }
+    private fun fail(e: Throwable) = _state.update {
+        // Never leave the user on [Step.Loading]: it renders no error and has no
+        // control on it, so a server that has moved would hang the app on
+        // "Connecting…" for ever. Fall back to somewhere they can act.
+        val step = if (it.step == Step.Loading) {
+            if (it.sources.isEmpty()) Step.AddProvider else Step.Sources
+        } else {
+            it.step
+        }
+        it.copy(step = step, busy = false, error = e.message ?: e.toString())
+    }
 
     private fun <T> bg(block: suspend () -> T) = viewModelScope.launch {
         _state.update { it.copy(busy = true, error = null) }
@@ -391,6 +437,58 @@ class ConfigViewModel(app: Application) : AndroidViewModel(app) {
         }
     }
 
+    // ------------------------------------------------------------- options
+
+    fun showOptions() {
+        val cfg = settings.episode
+        _state.update {
+            it.copy(
+                step = Step.Options,
+                error = null,
+                options = Options(
+                    skipSilent = cfg?.skipSilent ?: true,
+                    onWake = settings.onWake,
+                    onTap = settings.onTap,
+                    hasCues = cfg?.let { c ->
+                        c.provider == Settings.Provider.JELLYFIN ||
+                            c.subtitleRef.isNotEmpty()
+                    },
+                ),
+            )
+        }
+    }
+
+    /**
+     * Toggling the subtitle filter rebuilds the scene list, so it cannot be
+     * applied to the episode already playing without invalidating it.
+     *
+     * Writing the episode back does exactly that: the cache profile carries
+     * `skipSilent`, so the old scenes are left behind rather than served under a
+     * mapping that no longer holds, and the position resets to the start because
+     * scene 93 of the other setting is a different moment in the film.
+     */
+    fun setSkipSilent(on: Boolean) {
+        settings.episode?.let { settings.episode = it.copy(skipSilent = on) }
+        _state.update { it.copy(options = it.options.copy(skipSilent = on)) }
+        SceneState.ensurePrefetch(ctx)
+        SceneState.requestUpdate(ctx)
+    }
+
+    fun setOnWake(mode: Advance) {
+        settings.onWake = mode
+        _state.update { it.copy(options = it.options.copy(onWake = mode)) }
+        // The burst on the face was built under the old setting.
+        SceneState.requestUpdate(ctx)
+    }
+
+    fun setOnTap(mode: Advance) {
+        settings.onTap = mode
+        _state.update { it.copy(options = it.options.copy(onTap = mode)) }
+        // The complications have to be rebuilt: "do nothing" removes their tap
+        // target entirely rather than swallowing the tap.
+        SceneState.requestUpdate(ctx)
+    }
+
     // -------------------------------------------------------------- choose
 
     fun choose(item: BrowseItem, play: Playable) {
@@ -410,7 +508,7 @@ class ConfigViewModel(app: Application) : AndroidViewModel(app) {
                 timelineRef = ref.partId,
                 subtitleRef = (play.subtitleRef as? PlexSource.PlexSubtitleRef)?.key.orEmpty(),
                 title = play.title.ifEmpty { item.title },
-                skipSilent = true,
+                skipSilent = settings.episode?.skipSilent ?: true,
                 provider = Settings.Provider.PLEX,
             )
 
@@ -423,7 +521,7 @@ class ConfigViewModel(app: Application) : AndroidViewModel(app) {
                     timelineRef = -1L,
                     subtitleRef = "",
                     title = play.title.ifEmpty { item.title },
-                    skipSilent = true,
+                    skipSilent = settings.episode?.skipSilent ?: true,
                     provider = Settings.Provider.JELLYFIN,
                     trickplay = Settings.Trickplay(
                         itemId = ref.itemId,
@@ -469,6 +567,7 @@ class ConfigViewModel(app: Application) : AndroidViewModel(app) {
                 stack.removeLastOrNull()
                 if (stack.isEmpty()) loadRoots() else showLevel()
             }
+            Step.Options -> loadRoots()
             // With one source the sources step does not exist to go back to.
             Step.Browse ->
                 if (settings.sources.size > 1) showSources()
