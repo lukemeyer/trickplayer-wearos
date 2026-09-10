@@ -88,6 +88,30 @@ class PlexLibrary(private val server: String, private val plex: PlexClient) {
             }
         }
 
+    /**
+     * Playlists, which are a browse ROOT of their own rather than a child of a
+     * library — they cross libraries by nature, so filing them under one is
+     * wrong (UI.md §2).
+     *
+     * They are server-scoped on both providers, so a playlist never names an
+     * item from somewhere else. What it can name is an item this face cannot
+     * show, and that is ordinary eligibility, filtered on the way in.
+     */
+    fun playlists(): List<Item> =
+        get("/playlists?playlistType=video").arr("Metadata")
+            .map { Item(it.str("ratingKey"), it.str("title"), "${it.int("leafCount")} items") }
+
+    fun playlistItems(playlistRatingKey: String): List<Item> =
+        get("/playlists/$playlistRatingKey/items").arr("Metadata").map { m ->
+            if (m.str("type") == "episode") {
+                val s = m.int("parentIndex").toString().padStart(2, '0')
+                val e = m.int("index").toString().padStart(2, '0')
+                Item(m.str("ratingKey"), m.str("grandparentTitle"), "S${s}E$e ${m.str("title")}")
+            } else {
+                Item(m.str("ratingKey"), m.str("title"), m.str("year"))
+            }
+        }
+
     fun movies(sectionKey: String): List<Item> =
         get("/library/sections/$sectionKey/all").arr("Metadata")
             .map { Item(it.str("ratingKey"), it.str("title"), it.str("year")) }

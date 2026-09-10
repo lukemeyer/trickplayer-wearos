@@ -2,10 +2,12 @@ package com.lukemeyer.bif.data
 
 import android.content.Context
 import android.util.Log
-import com.lukemeyer.bif.core.timeline.Timeline
+import com.lukemeyer.bif.core.jellyfin.JellyfinClient
 import com.lukemeyer.bif.core.plex.PlexClient
 import com.lukemeyer.bif.core.scene.Episode
 import com.lukemeyer.bif.core.scene.SceneResolver
+import com.lukemeyer.bif.core.source.JellyfinSource
+import com.lukemeyer.bif.core.source.MediaSource
 import com.lukemeyer.bif.core.source.Playable
 import com.lukemeyer.bif.core.source.PlexSource
 import com.lukemeyer.bif.core.subs.Srt
@@ -29,7 +31,6 @@ class EpisodeRepository private constructor(
     private val config: Settings.Episode,
 ) {
 
-    private val plex = PlexClient(config.token, allowInsecureDirect = true)
     val cache = SceneCache(context, config.profile)
 
     /** Routes to try, the one that last worked first. */
@@ -39,19 +40,60 @@ class EpisodeRepository private constructor(
     @Volatile private var active: String = config.server
 
     /**
-     * This episode as the seam sees it.
+     * This episode as the seam sees it, and the provider that can serve it.
      *
-     * Route-independent — a [PlexSource] is built per route inside
-     * [viaAnyRoute], because failover is a device concern and not a source one.
+     * Route-independent: a source is built **per route** inside [viaAnyRoute],
+     * because failover is a device concern and not a source one. Which provider
+     * gets built is the only place in this module that names one — everything
+     * below asks the interface.
      */
-    private val playable = Playable(
-        title = config.title,
-        durationMs = null,
-        timelineRef = PlexSource.PlexTimelineRef(config.timelineRef),
-        subtitleRef = if (config.subtitleRef.isEmpty()) null
-            else PlexSource.PlexSubtitleRef(config.subtitleRef),
-    )
-    private fun timelineUrl() = plex.timelineUrl(active, config.timelineRef)
+    private val playable: Playable = when (config.provider) {
+        Settings.Provider.PLEX -> Playable(
+            title = config.title,
+            durationMs = null,
+            timelineRef = PlexSource.PlexTimelineRef(config.timelineRef),
+            subtitleRef = if (config.subtitleRef.isEmpty()) null
+                else PlexSource.PlexSubtitleRef(config.subtitleRef),
+        )
+
+        Settings.Provider.JELLYFIN -> {
+            val t = config.trickplay ?: error("Jellyfin config without trickplay geometry")
+            Playable(
+                title = config.title,
+                durationMs = null,
+                timelineRef = JellyfinSource.JellyfinTimelineRef(
+                    itemId = t.itemId,
+                    width = t.width,
+                    geometry = JellyfinSource.Geometry(
+                        tileWidth = t.tileWidth,
+                        tileHeight = t.tileHeight,
+                        thumbWidth = t.thumbWidth,
+                        thumbHeight = t.thumbHeight,
+                        intervalMs = t.intervalMs,
+                        thumbnailCount = t.thumbnailCount,
+                    ),
+                ),
+                subtitleRef = t.subtitleIndex.takeIf { it >= 0 }?.let {
+                    JellyfinSource.JellyfinSubtitleRef(t.itemId, t.mediaSourceId, it)
+                },
+            )
+        }
+    }
+
+    private fun sourceFor(uri: String): MediaSource = when (config.provider) {
+        Settings.Provider.PLEX ->
+            PlexSource(PlexClient(config.token, allowInsecureDirect = true), uri)
+
+        // A tile-sheet source keeps its own cache, so building one per route
+        // per call would throw the sheet away between scenes. One instance,
+        // reused — there is only ever one route on Jellyfin anyway.
+        Settings.Provider.JELLYFIN -> jellyfin ?: JellyfinSource(
+            JellyfinClient(uri, config.token),
+            AndroidSheetCropper(),
+        ).also { jellyfin = it }
+    }
+
+    @Volatile private var jellyfin: JellyfinSource? = null
 
     /**
      * Run a fetch, falling back through the other routes when the current one
@@ -92,54 +134,57 @@ class EpisodeRepository private constructor(
     /** Parsed once per process; the on-disk copies below survive a cold start. */
     @Volatile private var episode: Episode? = null
 
-    private val indexFile = File(context.cacheDir, "episode/${config.profile}.idx")
     private val subsFile = File(context.cacheDir, "episode/${config.profile}.srt")
 
     /**
-     * Fetch and parse the index and subtitles, once.
+     * Fetch the timeline and the cues, once per process.
      *
-     * Both are cached to disk: the index is ~6 KB and the sidecar ~32 KB, so
-     * holding them costs nothing next to re-fetching them on every cold start.
+     * **The timeline is no longer cached to disk, and the subtitles still are.**
+     * That asymmetry is the seam showing through honestly rather than a
+     * regression: a timeline is provider-shaped — Plex's is byte offsets,
+     * Jellyfin's is geometry with no bytes at all — so nothing here can
+     * serialise one without unwrapping a locator it is not allowed to read.
+     * Cues are just text and stay cached.
+     *
+     * The cost of dropping it is two ranged reads of about 6 KB on Plex, and
+     * literally nothing on Jellyfin, where the timeline is computed from the
+     * manifest that came with the item. It is also only paid on a [SceneCache]
+     * miss, which is a fetch either way.
      */
     @Synchronized
     fun episode(): Episode {
         episode?.let { return it }
-        indexFile.parentFile?.mkdirs()
+        subsFile.parentFile?.mkdirs()
 
-        val idxBytes = indexFile.takeIf { it.exists() }?.readBytes() ?: run {
-            viaAnyRoute("index") { uri ->
-                val url = plex.timelineUrl(uri, config.timelineRef)
-                val head = plex.getRange(url, 0, 63)
-                val header = Timeline.parseHeader(head)
-                Log.i(TAG, "BIF ${header.count} frames, multiplier ${header.multiplier} ms")
-                plex.getRange(url, 0, (header.indexBytes - 1).toLong())
-            }?.also { indexFile.writeBytes(it) }
-                ?: throw java.io.IOException("no route to the Plex server")
-        }
-        val header = Timeline.parseHeader(idxBytes)
-        val index = Timeline.parseIndex(idxBytes, header)
+        val frames = viaAnyRoute("timeline") { uri -> sourceFor(uri).timeline(playable) }
+            ?: throw java.io.IOException("no route to the ${config.provider} server")
 
-        val srt = subsFile.takeIf { it.exists() }?.readText() ?: run {
-            if (config.subtitleRef.isEmpty()) "" else {
-                viaAnyRoute("subtitles") { uri ->
-                    Srt.decodeBytes(plex.getTextBytes(plex.subtitleUrl(uri, config.subtitleRef)))
-                }?.also { subsFile.writeText(it) } ?: ""
-            }
-        }
-        val cues = if (srt.isEmpty()) emptyList() else Srt.parse(srt)
+        // Cached to disk as SRT — the format the parser already reads, rather
+        // than a serialisation invented for the cache. Worth keeping on
+        // Jellyfin especially, where fetching cues makes the server convert an
+        // embedded track on demand rather than serve a file (F-037).
+        val cues = subsFile.takeIf { it.exists() }
+            ?.let { runCatching { Srt.parse(it.readText()) }.getOrNull() }
+            ?: viaAnyRoute("subtitles") { uri -> sourceFor(uri).cues(playable) }
+                ?.also { runCatching { subsFile.writeText(Srt.format(it)) } }
+            ?: emptyList()
 
-        // Scenes come from the source's own frame timings, not a fixed
-        // interval — every surviving frame is its own scene, duplicates are
-        // dropped by declared length, and silent windows go last (F-001,
-        // F-036). No interval to choose any more.
+        // A source with no per-frame byte lengths gets neither blank filtering
+        // nor duplicate detection — skipped, not faked. Decided once here from
+        // the provider's own capabilities rather than by each filter noticing a
+        // null and deciding for itself (SEAM.md §4).
+        val caps = sourceFor(active).capabilities()
+
         val ep = Episode(
-            index = Timeline.toFrameRefs(index),
+            index = frames,
             cues = cues,
-            durationMs = index.lastOrNull()?.tsMs ?: 0L,
+            durationMs = frames.lastOrNull()?.tsMs ?: 0L,
             skipSilent = config.skipSilent,
+            hasFrameSizeHints = caps.hasFrameSizeHints,
         )
-        Log.i(TAG, "episode ready: ${ep.sceneCount} scenes of ${index.size} frames " +
-            "(${ep.duplicateFlags.count { it }} duplicate), ${cues.size} cues")
+        Log.i(TAG, "episode ready: ${ep.sceneCount} scenes of ${frames.size} frames " +
+            "(${ep.duplicateFlags.count { it }} duplicate), ${cues.size} cues, " +
+            "${config.provider}")
         episode = ep
         return ep
     }
@@ -165,7 +210,7 @@ class EpisodeRepository private constructor(
         // that is a byte range, on a tile-sheet source a sheet and a grid cell,
         // and the difference stays behind the seam (SEAM.md §5).
         val jpeg = viaAnyRoute("scene $sceneIndex") { uri ->
-            PlexSource(plex, uri).frameBytes(playable, ent)
+            sourceFor(uri).frameBytes(playable, ent)
         } ?: return null
 
         val cues = ep.cuesFor(r.scene).ifEmpty { listOf(fmtTime(ent.tsMs)) }

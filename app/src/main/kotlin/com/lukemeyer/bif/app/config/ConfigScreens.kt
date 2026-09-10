@@ -1,5 +1,10 @@
 package com.lukemeyer.bif.app.config
 
+import android.app.Activity
+import android.app.RemoteInput
+import android.content.Intent
+import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -21,15 +26,26 @@ import androidx.wear.compose.material.ListHeader
 import androidx.wear.compose.material.MaterialTheme
 import androidx.wear.compose.material.Text
 import androidx.wear.compose.material.TimeText
-import com.lukemeyer.bif.core.plex.PlexLibrary
-import com.lukemeyer.bif.core.plex.PlexTv
+import androidx.wear.input.RemoteInputIntentHelper
+import com.lukemeyer.bif.core.source.BrowseItem
+import com.lukemeyer.bif.core.source.Container
+import com.lukemeyer.bif.core.source.Playable
+import com.lukemeyer.bif.core.source.ServerRef
 
 /**
  * The configuration UI.
  *
- * Deliberately a stack of lists. There is no keyboard here and there does not
- * need to be: the only text the user ever supplies is a four-character code
- * typed on some *other* device.
+ * Deliberately a stack of lists, and it stays that way with a second provider:
+ * the flow is the same everywhere except where the providers genuinely differ,
+ * which is sign-in. The only text the user ever supplies is a code typed on
+ * some *other* device — plus, on Jellyfin alone, a server address, because
+ * there is no account service that could know it.
+ *
+ * No preview here, and not a reduced one: **none**. On a phone a preview
+ * answers "will this content survive my display", which needs several scenes
+ * side by side and the picture controls next to them. On a 450 px circle there
+ * is no picture control to judge and the only question left — "is this the
+ * right episode" — is already answered by the title (UI.md §3).
  */
 
 @Composable
@@ -37,12 +53,13 @@ fun ConfigScreen(state: ConfigViewModel.State, vm: ConfigViewModel) {
     Box(Modifier.fillMaxSize()) {
         TimeText()
         when (val step = state.step) {
-            ConfigViewModel.Step.SignIn -> SignIn(state, vm)
-            is ConfigViewModel.Step.Linking -> Linking(step.code, state, vm)
+            ConfigViewModel.Step.Sources -> Sources(state, vm)
+            ConfigViewModel.Step.AddProvider -> AddProvider(state, vm)
+            ConfigViewModel.Step.AddAddress -> AddAddress(vm)
+            is ConfigViewModel.Step.Linking -> Linking(step, state, vm)
             ConfigViewModel.Step.Servers -> Servers(state, vm)
-            ConfigViewModel.Step.Libraries -> Libraries(state, vm)
-            ConfigViewModel.Step.Shows -> Shows(state, vm)
-            is ConfigViewModel.Step.Items -> Items(step.showTitle, state, vm)
+            ConfigViewModel.Step.Browse -> Browse(state, vm)
+            is ConfigViewModel.Step.Items -> Items(step.title, state, vm)
             is ConfigViewModel.Step.Done -> Done(step.title, vm)
         }
         if (state.busy) {
@@ -60,60 +77,6 @@ private fun Centered(content: @Composable () -> Unit) {
         verticalArrangement = Arrangement.Center,
         horizontalAlignment = Alignment.CenterHorizontally,
     ) { content() }
-}
-
-@Composable
-private fun SignIn(state: ConfigViewModel.State, vm: ConfigViewModel) = Centered {
-    Text("BIF Watchface", style = MaterialTheme.typography.title3, textAlign = TextAlign.Center)
-    Text(
-        state.error ?: "Connect your Plex account",
-        style = MaterialTheme.typography.caption2,
-        textAlign = TextAlign.Center,
-        color = if (state.error != null) MaterialTheme.colors.error else MaterialTheme.colors.onSurfaceVariant,
-        modifier = Modifier.padding(vertical = 8.dp),
-    )
-    Chip(
-        label = { Text("Sign in") },
-        onClick = { vm.signIn() },
-        colors = ChipDefaults.primaryChipColors(),
-        modifier = Modifier.fillMaxWidth(),
-    )
-}
-
-/**
- * The whole reason the PIN flow belongs on a watch: a four-character code, and
- * the typing happens somewhere else entirely.
- */
-@Composable
-private fun Linking(
-    code: String,
-    state: ConfigViewModel.State,
-    vm: ConfigViewModel,
-) = Centered {
-    Text("Go to", style = MaterialTheme.typography.caption2)
-    Text("plex.tv/link", style = MaterialTheme.typography.title3, textAlign = TextAlign.Center)
-    Text(
-        code,
-        style = MaterialTheme.typography.display1,
-        textAlign = TextAlign.Center,
-        modifier = Modifier.padding(vertical = 6.dp),
-    )
-    Text(
-        state.error ?: "and enter this code",
-        style = MaterialTheme.typography.caption2,
-        textAlign = TextAlign.Center,
-        color = MaterialTheme.colors.onSurfaceVariant,
-    )
-    // Nothing may depend on a timer alone. The user types this code on another
-    // device, so the watch may have dozed or the activity been stopped by the
-    // time they come back — the poll loop can be seconds away or gone. This is
-    // the escape hatch that lets them finish the flow themselves.
-    // See trickplayer-knowledge findings/F-018.
-    Chip(
-        onClick = { vm.checkNow() },
-        label = { Text("I've entered it") },
-        modifier = Modifier.padding(top = 10.dp),
-    )
 }
 
 @Composable
@@ -144,79 +107,248 @@ private fun ChipList(
     }
 }
 
+/**
+ * Listed by SERVER name, not provider name — "Cubert", not "Plex". Users think
+ * in servers, and the provider is a badge (UI.md §1).
+ *
+ * Only reachable with two or more. With one source this screen does not appear
+ * at all: it is absent, not something to dismiss.
+ */
+@Composable
+private fun Sources(state: ConfigViewModel.State, vm: ConfigViewModel) =
+    ChipList("Servers") {
+        items(state.sources) { rec: Map<String, String> ->
+            Chip(
+                label = { Text(rec["name"] ?: rec["server"].orEmpty(), maxLines = 1) },
+                secondaryLabel = {
+                    Text(if (rec["provider"] == "jellyfin") "Jellyfin" else "Plex")
+                },
+                onClick = { vm.openSource(rec) },
+                modifier = Modifier.fillMaxWidth(),
+            )
+        }
+        item {
+            Chip(
+                label = { Text("Add a server") },
+                onClick = { vm.addSource() },
+                modifier = Modifier.fillMaxWidth(),
+            )
+        }
+    }
+
+/** The only place a provider *type* is ever named to the user. */
+@Composable
+private fun AddProvider(state: ConfigViewModel.State, vm: ConfigViewModel) = Centered {
+    Text("Add a server", style = MaterialTheme.typography.title3, textAlign = TextAlign.Center)
+    if (state.error != null) {
+        Text(
+            state.error,
+            style = MaterialTheme.typography.caption3,
+            textAlign = TextAlign.Center,
+            color = MaterialTheme.colors.error,
+            modifier = Modifier.padding(vertical = 4.dp),
+        )
+    }
+    Chip(
+        label = { Text("Plex") },
+        onClick = { vm.chooseProvider("plex") },
+        colors = ChipDefaults.primaryChipColors(),
+        modifier = Modifier.fillMaxWidth().padding(top = 6.dp),
+    )
+    Chip(
+        label = { Text("Jellyfin") },
+        onClick = { vm.chooseProvider("jellyfin") },
+        modifier = Modifier.fillMaxWidth().padding(top = 4.dp),
+    )
+}
+
+/**
+ * The one text field in the whole app, and only Jellyfin needs it: there is no
+ * account service, so the address IS the identity and nothing can be
+ * authenticated before it is known.
+ *
+ * Handed to the system's own input — voice, handwriting, or whatever keyboard
+ * the watch has — rather than a Compose text field, because dictating "ten dot
+ * twelve dot eighteen" is a far better experience than a 450 px keyboard. It is
+ * asked for **once**: the address is saved with the credential, precisely so
+ * nobody has to do this twice.
+ */
+@Composable
+private fun AddAddress(vm: ConfigViewModel) {
+    val launcher = rememberLauncherForActivityResult(
+        ActivityResultContracts.StartActivityForResult(),
+    ) { result ->
+        if (result.resultCode == Activity.RESULT_OK) {
+            val text = result.data
+                ?.let { RemoteInput.getResultsFromIntent(it) }
+                ?.getCharSequence(ADDRESS_KEY)
+                ?.toString()
+                .orEmpty()
+            vm.setAddress(text)
+        }
+    }
+
+    Centered {
+        Text("Jellyfin", style = MaterialTheme.typography.title3)
+        Text(
+            "Your server's address",
+            style = MaterialTheme.typography.caption2,
+            textAlign = TextAlign.Center,
+            color = MaterialTheme.colors.onSurfaceVariant,
+            modifier = Modifier.padding(vertical = 6.dp),
+        )
+        Chip(
+            label = { Text("Enter address") },
+            onClick = {
+                val remoteInputs: List<RemoteInput> = listOf(
+                    RemoteInput.Builder(ADDRESS_KEY).setLabel("Server address").build(),
+                )
+                val intent: Intent = RemoteInputIntentHelper.createActionRemoteInputIntent()
+                RemoteInputIntentHelper.putRemoteInputsExtra(intent, remoteInputs)
+                launcher.launch(intent)
+            },
+            colors = ChipDefaults.primaryChipColors(),
+            modifier = Modifier.fillMaxWidth(),
+        )
+    }
+}
+
+private const val ADDRESS_KEY = "jellyfin_address"
+
+/**
+ * The whole reason a code-and-poll flow belongs on a watch: a short code, and
+ * the typing happens somewhere else entirely.
+ *
+ * One screen for both providers, because the flows are the same shape (F-018).
+ * Only [ConfigViewModel.Step.Linking.enterAt] differs, and it comes from the
+ * provider because the user cannot guess it.
+ */
+@Composable
+private fun Linking(
+    step: ConfigViewModel.Step.Linking,
+    state: ConfigViewModel.State,
+    vm: ConfigViewModel,
+) = Centered {
+    Text("Go to", style = MaterialTheme.typography.caption2)
+    Text(
+        step.enterAt,
+        style = MaterialTheme.typography.caption1,
+        textAlign = TextAlign.Center,
+        maxLines = 3,
+    )
+    Text(
+        step.code,
+        style = MaterialTheme.typography.display1,
+        textAlign = TextAlign.Center,
+        modifier = Modifier.padding(vertical = 6.dp),
+    )
+    Text(
+        state.error ?: "and enter this code",
+        style = MaterialTheme.typography.caption2,
+        textAlign = TextAlign.Center,
+        color = MaterialTheme.colors.onSurfaceVariant,
+    )
+    // Nothing may depend on a timer alone. The code is typed on another device,
+    // so the watch may have dozed or this activity been stopped by the time the
+    // user comes back — the poll loop can be seconds away or gone. This is the
+    // escape hatch that lets them finish the flow themselves (F-018).
+    Chip(
+        onClick = { vm.checkNow() },
+        label = { Text("I've entered it") },
+        modifier = Modifier.padding(top = 10.dp),
+    )
+}
+
+/** Plex only. Jellyfin has no account service, so there is nothing to list. */
 @Composable
 private fun Servers(state: ConfigViewModel.State, vm: ConfigViewModel) =
     ChipList("Server", "${state.servers.size} found") {
-        items(state.servers) { s: PlexTv.Server ->
+        items(state.servers) { s: ServerRef ->
             Chip(
                 label = { Text(s.name, maxLines = 1) },
-                secondaryLabel = { Text("${s.connections.size} route(s)") },
+                secondaryLabel = { Text("${s.routes.size} route(s)") },
                 onClick = { vm.chooseServer(s) },
                 modifier = Modifier.fillMaxWidth(),
             )
         }
     }
 
+/**
+ * Continue watching, playlists, libraries — **the same three roots as the other
+ * two platforms**.
+ *
+ * The watch is not given a reduced set. The screen is small, but a three-item
+ * list is not what makes a small screen hard, and diverging the information
+ * architecture per platform is how the three builds drifted apart in the first
+ * place (UI.md §2).
+ */
 @Composable
-private fun Libraries(state: ConfigViewModel.State, vm: ConfigViewModel) =
-    ChipList("Library") {
-        // First, because it is nearly always the answer. A 357-show library is
-        // forty-odd swipes deep; On Deck is what you are already watching.
-        item {
+private fun Browse(state: ConfigViewModel.State, vm: ConfigViewModel) =
+    ChipList(state.sourceName.ifEmpty { "Browse" }) {
+        itemsIndexed(state.roots) { i, root ->
             Chip(
-                label = { Text("On Deck") },
-                secondaryLabel = { Text("what you're watching") },
-                onClick = { vm.chooseOnDeck() },
-                colors = ChipDefaults.primaryChipColors(),
-                modifier = Modifier.fillMaxWidth(),
-            )
-        }
-        items(state.sections) { sec: PlexLibrary.Section ->
-            Chip(
-                label = { Text(sec.title, maxLines = 1) },
-                secondaryLabel = { Text(sec.type) },
-                onClick = { vm.chooseSection(sec) },
+                label = { Text(root.title, maxLines = 1) },
+                secondaryLabel = if (i == 0) {
+                    { Text("what you're watching") }
+                } else null,
+                // Continue watching first, and not as a nicety: the test account
+                // has 357 shows, roughly forty-four swipes to the middle of the
+                // alphabet (F-019).
+                colors = if (i == 0) ChipDefaults.primaryChipColors()
+                    else ChipDefaults.secondaryChipColors(),
+                onClick = { vm.openContainer(root) },
                 modifier = Modifier.fillMaxWidth(),
             )
         }
     }
 
-@Composable
-private fun Shows(state: ConfigViewModel.State, vm: ConfigViewModel) =
-    ChipList("Show", "${state.shows.size}") {
-        items(state.shows) { show: PlexLibrary.Item ->
-            Chip(
-                label = { Text(show.title, maxLines = 2) },
-                onClick = { vm.chooseShow(show) },
-                modifier = Modifier.fillMaxWidth(),
-            )
-        }
-    }
+private fun androidx.wear.compose.foundation.lazy.ScalingLazyListScope.itemsIndexed(
+    list: List<Container>,
+    content: @Composable androidx.wear.compose.foundation.lazy.ScalingLazyListItemScope.(Int, Container) -> Unit,
+) = items(list.size) { i -> content(i, list[i]) }
 
 /**
- * Usable episodes appear as they are confirmed, with the scan still running
- * underneath. Waiting for a whole show would be four seconds of nothing.
+ * One level, whatever that level is: sub-containers first, then the items that
+ * survive eligibility.
+ *
+ * Usable items appear as they are confirmed, with the scan still running
+ * underneath — waiting for a whole show would be four seconds of nothing on
+ * Plex (F-015).
  */
 @Composable
 private fun Items(title: String, state: ConfigViewModel.State, vm: ConfigViewModel) {
     val scanning = state.scanned < state.toScan
     ChipList(
         title,
-        if (scanning) "checking ${state.scanned}/${state.toScan} — ${state.playable.size} usable"
-        else "${state.playable.size} usable of ${state.toScan}",
+        when {
+            state.toScan == 0 -> null
+            scanning -> "checking ${state.scanned}/${state.toScan} — ${state.playable.size} playable"
+            // A container that is half ineligible says so rather than silently
+            // appearing short (UI.md §2).
+            else -> "${state.playable.size} of ${state.toScan} playable"
+        },
     ) {
-        items(state.playable) { (item, play) ->
+        items(state.containers) { c: Container ->
+            Chip(
+                label = { Text(c.title, maxLines = 2) },
+                secondaryLabel = c.subtitle.takeIf { it.isNotEmpty() }?.let { { Text(it) } },
+                onClick = { vm.openContainer(c) },
+                modifier = Modifier.fillMaxWidth(),
+            )
+        }
+        items(state.playable) { (item: BrowseItem, play: Playable) ->
             Chip(
                 label = { Text(item.title, maxLines = 2) },
-                secondaryLabel = { Text("${item.subtitle}  ${play.subLanguage}") },
+                secondaryLabel = item.subtitle.takeIf { it.isNotEmpty() }?.let { { Text(it) } },
                 onClick = { vm.choose(item, play) },
                 modifier = Modifier.fillMaxWidth(),
             )
         }
-        if (state.playable.isEmpty() && !scanning) {
+        if (state.containers.isEmpty() && state.playable.isEmpty() && !scanning) {
             item {
                 Text(
-                    "None of these have both a trick-play index and sidecar subtitles.",
+                    "Nothing here can be played yet — an item needs a trick-play " +
+                        "index and subtitles.",
                     style = MaterialTheme.typography.caption2,
                     textAlign = TextAlign.Center,
                     color = MaterialTheme.colors.onSurfaceVariant,

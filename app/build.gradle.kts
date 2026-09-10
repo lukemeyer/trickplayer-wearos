@@ -44,6 +44,10 @@ dependencies {
     implementation(libs.compose.ui.tooling.preview)
     implementation(libs.wear.compose.material)
     implementation(libs.wear.compose.foundation)
+    // The system's own text input — voice, handwriting or a tiny keyboard,
+    // whichever the watch offers. Needed for exactly one field: a Jellyfin
+    // server address, which has no account service to discover it from.
+    implementation(libs.wear.input)
     implementation(libs.androidx.activity.compose)
     implementation(libs.lifecycle.runtime.compose)
     implementation(libs.lifecycle.viewmodel.compose)

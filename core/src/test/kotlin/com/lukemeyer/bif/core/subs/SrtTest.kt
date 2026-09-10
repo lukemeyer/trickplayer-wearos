@@ -2,6 +2,7 @@ package com.lukemeyer.bif.core.subs
 
 import org.junit.jupiter.api.Assertions.assertEquals
 import org.junit.jupiter.api.Assertions.assertTrue
+import org.junit.jupiter.api.DisplayName
 import org.junit.jupiter.api.Test
 
 class SrtTest {
@@ -93,5 +94,27 @@ class SrtTest {
         // needs this to be an empty list, not a crash.
         val cues = listOf(Srt.Cue(0, 1000, "only line"))
         assertEquals(emptyList<String>(), Srt.cuesInWindow(cues, 50_000, 60_000))
+    }
+
+    @Test
+    @DisplayName("format is the inverse of parse, so a cue cache needs no new format")
+    fun formatRoundTrips() {
+        val original = Srt.parse(
+            """
+            1
+            00:00:01,000 --> 00:00:03,500
+            <i>First line</i>
+            and a second
+
+            2
+            01:02:03,004 --> 01:02:05,000
+            {\an8}Positioned, then stripped
+            """.trimIndent()
+        )
+        val again = Srt.parse(Srt.format(original))
+        assertEquals(original, again)
+        // The timestamps survive an hour boundary and a millisecond that is not
+        // a round number, which is where a naive formatter goes wrong.
+        assertEquals(3_723_004L, again[1].startMs)
     }
 }

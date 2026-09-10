@@ -3,7 +3,11 @@ package com.lukemeyer.bif.core.corpus
 import com.lukemeyer.bif.core.subs.Srt
 import com.lukemeyer.bif.core.scene.Episode
 import com.lukemeyer.bif.core.source.FrameLocator
+import com.lukemeyer.bif.core.jellyfin.JellyfinClient
 import com.lukemeyer.bif.core.source.FrameRef
+import com.lukemeyer.bif.core.source.JellyfinSource
+import com.lukemeyer.bif.core.source.Playable
+import com.lukemeyer.bif.core.source.SheetCropper
 import com.lukemeyer.bif.core.timeline.Timeline
 import kotlinx.serialization.json.*
 import kotlinx.serialization.json.contentOrNull
@@ -216,8 +220,9 @@ class CorpusConformanceTest {
     @DisplayName("real: a captured trick-play index from licence-free content")
     fun realCapture() {
         val dir = File(corpus, "real")
-        // Plex captures only: a Jellyfin fixture is tile sheets with no .bif,
-        // and this build has no Jellyfin provider to check it with yet.
+        // Plex captures only. The Jellyfin capture is tile sheets with no .bif
+        // and nothing to parse a header from; it is checked by
+        // [jellyfinGeometry] instead.
         val names = (dir.listFiles() ?: emptyArray())
             .filter { it.name.endsWith(".expected.json") }
             .map { it.name.removeSuffix(".expected.json") }
@@ -263,6 +268,111 @@ class CorpusConformanceTest {
             }
         }
     }
+
+    @Test
+    @DisplayName("real: tile-sheet geometry, from the same film on the other provider")
+    fun jellyfinGeometry() {
+        val dir = File(corpus, "real")
+        val names = (dir.listFiles() ?: emptyArray())
+            .filter { it.name.endsWith(".expected.json") }
+            .map { it.name.removeSuffix(".expected.json") }
+            .filter { n ->
+                obj("real/$n.expected.json")["source"]?.jsonObject
+                    ?.get("provider")?.jsonPrimitive?.contentOrNull == "jellyfin"
+            }
+        assumeTrue(names.isNotEmpty(), "no Jellyfin capture in corpus/real/")
+
+        for (name in names) {
+            val exp = obj("real/$name.expected.json")
+            val g = exp["geometry"]!!.jsonObject
+            val geometry = JellyfinSource.Geometry(
+                tileWidth = g["tileWidth"]!!.jsonPrimitive.int,
+                tileHeight = g["tileHeight"]!!.jsonPrimitive.int,
+                thumbWidth = g["thumbWidth"]!!.jsonPrimitive.int,
+                thumbHeight = g["thumbHeight"]!!.jsonPrimitive.int,
+                intervalMs = g["intervalMs"]!!.jsonPrimitive.long,
+                thumbnailCount = g["thumbnailCount"]!!.jsonPrimitive.int,
+            )
+
+            // The timeline comes from geometry alone — no network, where Plex
+            // needs two ranged reads.
+            val playable = Playable(
+                title = name,
+                durationMs = null,
+                timelineRef = JellyfinSource.JellyfinTimelineRef("x", 320, geometry),
+                subtitleRef = null,
+            )
+            val frames = JellyfinSource(NoClient, NoCropper).timeline(playable)
+
+            assertEquals(
+                g["thumbnailCount"]!!.jsonPrimitive.int, frames.size, "$name frame count"
+            )
+            exp["frames"]!!.jsonArray.forEachIndexed { i, e ->
+                val f = e.jsonObject
+                assertEquals(f["tsMs"]!!.jsonPrimitive.long, frames[i].tsMs, "$name frame $i tsMs")
+                // **Null, and that is the answer.** A thumbnail has no byte
+                // length of its own, which is what makes blank filtering and
+                // duplicate detection unavailable here rather than merely
+                // expensive (F-038, SEAM.md §4).
+                assertNull(frames[i].sizeHint, "$name frame $i sizeHint")
+                assertEquals(
+                    f["sheet"]!!.jsonPrimitive.int,
+                    (frames[i].locator as JellyfinSource.Cell).sheet,
+                    "$name frame $i sheet",
+                )
+            }
+
+            // The crop boxes, including the last thumbnail of a PARTIAL final
+            // sheet — 73 thumbnails in a 100-cell grid, which is what anything
+            // assuming full sheets runs off the end of.
+            for (e in exp["cropBoxes"]!!.jsonArray) {
+                val b = e.jsonObject
+                val i = b["index"]!!.jsonPrimitive.int
+                val cell = JellyfinSource.cellOf(geometry, i)
+                assertEquals(b["sheet"]!!.jsonPrimitive.int, cell.sheet, "$name box $i sheet")
+                assertEquals(b["x"]!!.jsonPrimitive.int, cell.x, "$name box $i x")
+                assertEquals(b["y"]!!.jsonPrimitive.int, cell.y, "$name box $i y")
+                assertEquals(b["w"]!!.jsonPrimitive.int, cell.w, "$name box $i w")
+                assertEquals(b["h"]!!.jsonPrimitive.int, cell.h, "$name box $i h")
+            }
+
+            // Preview cost counts SHEETS, not scenes. On this fixture — 73
+            // thumbnails in one 100-cell sheet — three scenes and every scene
+            // therefore cost exactly the same.
+            //
+            // **That equality is a property of a single-sheet item, not of the
+            // provider.** A feature-length film is six sheets, where three
+            // scenes touch three of them and all the scenes touch six. What
+            // generalises is the bound below: cost can never exceed the whole
+            // trickplay set however many scenes are asked for, which is what
+            // makes gating on the estimate meaningful (F-038, UI.md §3).
+            val src = JellyfinSource(NoClient, NoCropper)
+            val sheets = (geometry.thumbnailCount + geometry.perSheet - 1) / geometry.perSheet
+            val ceiling = sheets * JellyfinSource.APPROX_SHEET_BYTES
+            for (n in listOf(1, 3, 10, geometry.thumbnailCount, geometry.thumbnailCount * 10)) {
+                val cost = src.previewCostBytes(playable, n)!!
+                assertTrue(
+                    cost <= ceiling,
+                    "$name: $n scenes estimated at $cost, above the $ceiling ceiling",
+                )
+            }
+            if (sheets == 1) {
+                assertEquals(
+                    src.previewCostBytes(playable, 3),
+                    src.previewCostBytes(playable, geometry.thumbnailCount),
+                    "$name: one sheet serves every scene, so the cost cannot differ",
+                )
+            }
+        }
+    }
+
+    /** Neither is reached: the geometry checks above touch no network or pixels. */
+    private object NoCropper : SheetCropper {
+        override fun crop(sheet: ByteArray, x: Int, y: Int, w: Int, h: Int) =
+            error("no cropping in a geometry test")
+    }
+
+    private val NoClient = JellyfinClient("http://unused.invalid")
 
     @Test
     @DisplayName("subs: encoding is sniffed from the BOM, not assumed")

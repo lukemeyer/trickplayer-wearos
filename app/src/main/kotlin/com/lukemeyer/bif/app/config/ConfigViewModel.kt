@@ -5,10 +5,19 @@ import android.content.Context
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
 import com.lukemeyer.bif.app.SceneState
-import com.lukemeyer.bif.core.plex.PlexClient
-import com.lukemeyer.bif.core.plex.PlexDiscovery
-import com.lukemeyer.bif.core.plex.PlexLibrary
-import com.lukemeyer.bif.core.plex.PlexTv
+import com.lukemeyer.bif.core.source.AuthAttempt
+import com.lukemeyer.bif.core.source.AuthPoll
+import com.lukemeyer.bif.core.source.BrowseItem
+import com.lukemeyer.bif.core.source.BrowseRef
+import com.lukemeyer.bif.core.source.Container
+import com.lukemeyer.bif.core.source.JellyfinAccount
+import com.lukemeyer.bif.core.source.JellyfinSource
+import com.lukemeyer.bif.core.source.MediaAccount
+import com.lukemeyer.bif.core.source.Playable
+import com.lukemeyer.bif.core.source.PlexAccount
+import com.lukemeyer.bif.core.source.PlexSource
+import com.lukemeyer.bif.core.source.ServerRef
+import com.lukemeyer.bif.data.AndroidSheetCropper
 import com.lukemeyer.bif.data.Settings
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
@@ -22,33 +31,47 @@ import kotlinx.coroutines.withContext
 import java.util.UUID
 
 /**
- * Drives sign-in, discovery and browsing.
+ * Drives sign-in, discovery and browsing — for whichever provider.
+ *
+ * **It names a provider in exactly one place**, [accountFor], and everything
+ * else talks to [MediaAccount]. Before this it talked to `PlexTv`,
+ * `PlexDiscovery` and `PlexLibrary` directly, which is how a second provider
+ * becomes a rewrite of the flow rather than a new file. See
+ * `trickplayer-knowledge/UI.md` §5.
  *
  * Every step reports partial results as they arrive rather than blocking on a
- * whole library — which matters most for eligibility checking, where a full show
- * is 157 requests and roughly four seconds.
+ * whole library — which matters most for eligibility, where a full show is 157
+ * requests on Plex and roughly four seconds.
  */
 class ConfigViewModel(app: Application) : AndroidViewModel(app) {
 
     sealed interface Step {
-        data object SignIn : Step
-        data class Linking(val code: String) : Step
+        /** Only ever shown with two or more saved. One source is not a screen. */
+        data object Sources : Step
+        data object AddProvider : Step
+        /** Jellyfin only: the address IS the identity, so it comes before auth. */
+        data object AddAddress : Step
+        data class Linking(val code: String, val enterAt: String) : Step
+        /** Plex only, and only with more than one. */
         data object Servers : Step
-        data object Libraries : Step
-        data object Shows : Step
-        data class Items(val showTitle: String) : Step
+        data object Browse : Step
+        data class Items(val title: String) : Step
         data class Done(val title: String) : Step
     }
 
     data class State(
-        val step: Step = Step.SignIn,
+        val step: Step = Step.AddProvider,
         val busy: Boolean = false,
         val error: String? = null,
-        val servers: List<PlexTv.Server> = emptyList(),
-        val sections: List<PlexLibrary.Section> = emptyList(),
-        val shows: List<PlexLibrary.Item> = emptyList(),
-        /** Episodes confirmed usable so far; grows while [scanned] climbs. */
-        val playable: List<Pair<PlexLibrary.Item, PlexLibrary.Playable>> = emptyList(),
+        val sources: List<Map<String, String>> = emptyList(),
+        val servers: List<ServerRef> = emptyList(),
+        val roots: List<Container> = emptyList(),
+        /** The source being browsed — not [sources].first(), once there are two. */
+        val sourceName: String = "",
+        /** Sub-containers at this level: shows, playlists. */
+        val containers: List<Container> = emptyList(),
+        /** Items confirmed usable so far; grows while [scanned] climbs. */
+        val playable: List<Pair<BrowseItem, Playable>> = emptyList(),
         val scanned: Int = 0,
         val toScan: Int = 0,
     )
@@ -58,13 +81,10 @@ class ConfigViewModel(app: Application) : AndroidViewModel(app) {
 
     private val ctx: Context get() = getApplication()
     private val settings = Settings(ctx)
-    private var pendingPinId: Long? = null
-    private var pendingPinExpiresAtMs: Long? = null
 
     /**
      * Stable per install, and it must be: plex.tv ties both the PIN and the
-     * issued token to this identifier, so regenerating it invalidates the
-     * sign-in.
+     * issued token to this identifier, so regenerating it invalidates sign-in.
      */
     private val clientId: String = ctx
         .getSharedPreferences("bif.client", Context.MODE_PRIVATE)
@@ -73,21 +93,56 @@ class ConfigViewModel(app: Application) : AndroidViewModel(app) {
                 .also { p.edit().putString("id", it).apply() }
         }
 
-    private val tv = PlexTv(clientId)
-
-    private var token: String? = null
-    private var server: PlexTv.Server? = null
-    private var route: String? = null
-    private var routes: List<String> = emptyList()
-    private var library: PlexLibrary? = null
-    private var sectionKey: String? = null
+    private var account: MediaAccount? = null
+    private var attempt: AuthAttempt? = null
+    private var server: ServerRef? = null
+    /** Containers walked into, deepest last. Depth is discovered, not assumed. */
+    private var stack: MutableList<Container> = mutableListOf()
     private var pollJob: Job? = null
     private var scanJob: Job? = null
 
+    /** The one place a provider is named. */
+    private fun accountFor(record: Map<String, String>): MediaAccount =
+        if (record["provider"] == "jellyfin") {
+            JellyfinAccount(
+                serverUrl = record["server"].orEmpty(),
+                token = record["token"],
+                userId = record["userId"].orEmpty(),
+                cropper = AndroidSheetCropper(),
+                savedId = record["id"],
+                savedName = record["name"],
+            )
+        } else {
+            PlexAccount(
+                clientId = clientId,
+                accountToken = record["accountToken"],
+                server = record["id"]?.let {
+                    ServerRef(
+                        id = it,
+                        name = record["name"].orEmpty(),
+                        routes = record["routes"]?.split('\n')?.filter(String::isNotBlank)
+                            ?: listOfNotNull(record["server"]),
+                        accessToken = record["token"].orEmpty(),
+                    )
+                },
+            )
+        }
+
     init {
-        // Already signed in from a previous run? Skip straight to the servers.
-        settings.episode?.let { token = it.token }
-        if (token != null) loadServers()
+        val saved = settings.sources
+        _state.update { it.copy(sources = saved) }
+        when {
+            // A sign-in interrupted by the user walking off to type the code
+            // resumes rather than restarting (F-018).
+            settings.pendingAuth != null -> resumePendingAuth()
+            saved.isEmpty() -> Unit                       // AddProvider, the default
+            else -> {
+                val last = settings.lastSourceId
+                val rec = saved.firstOrNull { "${it["provider"]}:${it["id"]}" == last }
+                    ?: saved.first()
+                openSource(rec)
+            }
+        }
     }
 
     private fun fail(e: Throwable) =
@@ -102,160 +157,229 @@ class ConfigViewModel(app: Application) : AndroidViewModel(app) {
         }
     }
 
+    // ------------------------------------------------------------- sources
+
+    fun showSources() {
+        _state.update { it.copy(step = Step.Sources, sources = settings.sources, error = null) }
+    }
+
+    fun addSource() {
+        settings.pendingAuth = null
+        _state.update { it.copy(step = Step.AddProvider, error = null) }
+    }
+
+    fun openSource(record: Map<String, String>) = bg {
+        account = accountFor(record)
+        settings.lastSourceId = "${record["provider"]}:${record["id"]}"
+        // A saved Plex source has a server but no live route yet; racing it here
+        // is what makes the rest of the session work (F-016).
+        account!!.listServers().firstOrNull { it.id == record["id"] }
+            ?.let { s -> server = s; account!!.use(s) }
+            ?: run {
+                val only = account!!.listServers().firstOrNull()
+                    ?: throw java.io.IOException("that server is no longer on the account")
+                server = only
+                account!!.use(only)
+            }
+        stack.clear()
+        loadRoots()
+    }
+
     // ------------------------------------------------------------- sign in
 
-    fun signIn() = bg {
-        // Resume a PIN that is still alive rather than minting a new one.
-        //
-        // The whole point of a short code is that it is typed at plex.tv/link
-        // on a *different* device, so the user walks away from the watch
-        // mid-flow and the activity may not survive that. Minting a fresh code
-        // on the way back silently invalidates the one they are looking at,
-        // and nothing on screen tells them why it never completes.
-        // See trickplayer-knowledge findings/F-018.
-        val now = System.currentTimeMillis()
-        val stored = settings.pendingPin?.takeIf { it.isLive(now) }
-
-        val pinId: Long
-        val code: String
-        val expiresAtMs: Long
-        if (stored != null) {
-            pinId = stored.id
-            code = stored.code
-            expiresAtMs = stored.expiresAtMs
+    /** The only place a provider *type* is named to the user. */
+    fun chooseProvider(provider: String) {
+        if (provider == "jellyfin") {
+            _state.update { it.copy(step = Step.AddAddress, error = null) }
         } else {
-            val minted = tv.createPin()
-            pinId = minted.id
-            code = minted.code
-            expiresAtMs = now + minted.expiresInSeconds * 1000
-            settings.pendingPin = Settings.PendingPin(pinId, code, expiresAtMs)
+            account = PlexAccount(clientId)
+            beginAuth(null)
         }
+    }
 
-        pendingPinId = pinId
-        pendingPinExpiresAtMs = expiresAtMs
-        _state.update { it.copy(step = Step.Linking(code), busy = false) }
+    /** The one field on this whole watch, and only Jellyfin needs it. */
+    fun setAddress(raw: String) {
+        val trimmed = raw.trim()
+        if (trimmed.isEmpty()) return
+        val url = if (trimmed.startsWith("http")) trimmed else "http://$trimmed"
+        account = JellyfinAccount(serverUrl = url, cropper = AndroidSheetCropper())
+        beginAuth(null)
+    }
+
+    private fun resumePendingAuth() {
+        val pending = settings.pendingAuth ?: return
+        account = accountFor(pending)
+        beginAuth(pending)
+    }
+
+    /**
+     * Code-and-poll, one path for both providers.
+     *
+     * The flows are the same shape — mint, show, poll, exchange — which is what
+     * lets F-018's rules transfer at all. Only the place the code is entered
+     * differs, and that string comes from the provider because the user cannot
+     * guess it.
+     */
+    private fun beginAuth(resuming: Map<String, String>?) = bg {
+        val acc = account ?: return@bg
+        val a = acc.beginAuth(resuming)
+        attempt = a
+        // Persisted because the point of a short code is that it is typed on a
+        // DIFFERENT device: the user walks away and this activity may not
+        // survive it. A fresh code on the way back strands them on one nobody
+        // is polling, with nothing on screen to say why.
+        settings.pendingAuth = a.state + mapOf(
+            "provider" to acc.provider,
+            "server" to (acc.persist()["server"] ?: ""),
+        )
+        _state.update { it.copy(step = Step.Linking(a.code, a.enterAt), busy = false) }
 
         pollJob?.cancel()
         pollJob = viewModelScope.launch {
-            // Poll until linked or the PIN actually expires — the expiry comes
-            // from plex.tv's own `expiresIn`, not from counting attempts, so a
-            // slow network cannot make a live code look dead or a dead one look
-            // live. Every three seconds: brisk enough to feel immediate, slow
-            // enough not to hammer plex.tv.
-            while (System.currentTimeMillis() < expiresAtMs) {
+            while (true) {
                 delay(3000)
-                if (tryRedeem(pinId)) return@launch
-            }
-            settings.pendingPin = null
-            _state.update {
-                it.copy(error = "That code expired. Try again.", step = Step.SignIn)
+                if (redeem()) return@launch
+                if (_state.value.step !is Step.Linking) return@launch
             }
         }
     }
 
     /**
-     * "I have authorised it" — redeem now instead of waiting for the next poll.
+     * "I have entered it" — check now instead of waiting for the next poll.
      *
-     * Nothing may depend on a timer alone. A watch can doze, and the activity
-     * can be stopped while the user is at another device typing the code; on
-     * the way back the poll loop may be seconds away or gone entirely. An
-     * explicit action is the escape hatch that makes the flow finish.
+     * Nothing may depend on a timer alone. A watch dozes, and this activity can
+     * be stopped while the user is at another device typing; on the way back the
+     * poll loop may be seconds away or gone entirely.
      */
     fun checkNow() = bg {
-        val id = pendingPinId ?: return@bg
-        if (!tryRedeem(id)) {
-            val expired = System.currentTimeMillis() >= (pendingPinExpiresAtMs ?: 0L)
-            _state.update {
-                if (expired) {
-                    settings.pendingPin = null
-                    it.copy(error = "That code expired. Try again.", step = Step.SignIn, busy = false)
-                } else {
-                    it.copy(error = "Not linked yet — finish at plex.tv/link.", busy = false)
+        if (!redeem()) {
+            _state.update { it.copy(error = "Not linked yet.", busy = false) }
+        }
+    }
+
+    /** @return true once a credential is held and the flow has moved on. */
+    private suspend fun redeem(): Boolean {
+        val acc = account ?: return false
+        val a = attempt ?: return false
+        val result = try {
+            withContext(Dispatchers.IO) { acc.poll(a) }
+        } catch (e: Exception) {
+            return false
+        }
+        when (result) {
+            AuthPoll.PENDING -> return false
+
+            // Said out loud rather than left spinning: an expired code looks
+            // exactly like one the user has not got round to typing.
+            AuthPoll.EXPIRED -> {
+                settings.pendingAuth = null
+                attempt = null
+                _state.update {
+                    it.copy(
+                        error = "That code expired. Try again.",
+                        step = Step.AddProvider,
+                        busy = false,
+                    )
                 }
+                return true
+            }
+
+            AuthPoll.OK -> {
+                settings.pendingAuth = null
+                attempt = null
+                afterAuth()
+                return true
             }
         }
     }
 
-    /** @return true if the PIN has been linked and a token is now held. */
-    private suspend fun tryRedeem(pinId: Long): Boolean {
-        val t = try {
-            withContext(Dispatchers.IO) { tv.checkPin(pinId) }
-        } catch (e: Exception) { null } ?: return false
-        token = t
-        settings.pendingPin = null
-        pendingPinId = null
-        loadServers()
-        return true
+    private suspend fun afterAuth() {
+        val acc = account ?: return
+        val servers = withContext(Dispatchers.IO) { acc.listServers() }
+        // Provider-supplied, not a fixed step: Jellyfin returns the one server
+        // it was given, so there is nothing to choose and nothing to show.
+        if (servers.size == 1 || !acc.capabilities().hasServerDiscovery) {
+            servers.firstOrNull()?.let { chooseServerNow(it) }
+                ?: fail(java.io.IOException("no servers on this account"))
+            return
+        }
+        _state.update { it.copy(step = Step.Servers, servers = servers, busy = false) }
     }
 
-    // ----------------------------------------------------------- discovery
+    fun chooseServer(s: ServerRef) = bg { chooseServerNow(s) }
 
-    fun loadServers() = bg {
-        val list = tv.servers(token!!)
-        _state.update { it.copy(step = Step.Servers, servers = list, busy = false) }
-    }
-
-    /** Race this server's routes, then list its libraries. */
-    fun chooseServer(s: PlexTv.Server) = bg {
+    private suspend fun chooseServerNow(s: ServerRef) {
+        val acc = account ?: return
         server = s
-        val r = PlexDiscovery.pickRoute(s)
-            ?: throw java.io.IOException("No route to ${s.name} from here")
-        route = r.uri
-        // Keep the losers. The winner here is nearly always the LAN address,
-        // which stops existing the moment the watch leaves the house — and with
-        // no alternatives stored there is nothing to fall back to.
-        routes = (listOf(r.uri) + s.connections.map { it.uri }).distinct()
-        val lib = PlexLibrary(r.uri, PlexClient(s.accessToken, allowInsecureDirect = true))
-        library = lib
-        val sections = lib.sections()
-        _state.update { it.copy(step = Step.Libraries, sections = sections, busy = false) }
+        withContext(Dispatchers.IO) { acc.use(s) }
+        settings.saveSource(acc.persist())
+        stack.clear()
+        loadRoots()
     }
 
-    /** Jump straight to what the account is part-way through. */
-    fun chooseOnDeck() = bg {
-        val items = library!!.onDeck()
-        _state.update { it.copy(step = Step.Items("On Deck"), shows = emptyList(), busy = false) }
-        scan(items)
-    }
+    // -------------------------------------------------------------- browse
 
-    fun chooseSection(sec: PlexLibrary.Section) = bg {
-        sectionKey = sec.key
-        val lib = library!!
-        if (sec.type == "show") {
-            val shows = lib.shows(sec.key)
-            _state.update { it.copy(step = Step.Shows, shows = shows, busy = false) }
-        } else {
-            // A movie library has no middle level; scan it directly.
-            val movies = lib.movies(sec.key)
-            _state.update { it.copy(step = Step.Items(sec.title), busy = false) }
-            scan(movies)
+    private suspend fun loadRoots() {
+        val acc = account ?: return
+        val roots = withContext(Dispatchers.IO) { acc.listRoots() }
+        _state.update {
+            it.copy(
+                step = Step.Browse,
+                roots = roots,
+                sources = settings.sources,
+                sourceName = server?.name ?: acc.persist()["name"].orEmpty(),
+                busy = false,
+            )
         }
     }
 
-    fun chooseShow(show: PlexLibrary.Item) = bg {
-        val eps = library!!.episodes(show.itemId)
-        _state.update { it.copy(step = Step.Items(show.title), busy = false) }
-        scan(eps)
+    fun openContainer(c: Container) = bg {
+        stack.add(c)
+        showLevel()
+    }
+
+    /**
+     * One level, whatever that level is.
+     *
+     * Containers and items are shown by the same screen because depth is
+     * discovered: a show is a container, a film is an item, a playlist is a
+     * container of items. The old `library -> show -> episode` walk was a
+     * *television* structure that films and playlists had to be bent to fit.
+     */
+    private suspend fun showLevel() {
+        val acc = account ?: return
+        val here = stack.lastOrNull() ?: return
+        val (containers, items) = withContext(Dispatchers.IO) { acc.listChildren(here.ref) }
+        _state.update {
+            it.copy(
+                step = Step.Items(here.title),
+                containers = containers,
+                playable = emptyList(),
+                scanned = 0,
+                toScan = items.size,
+                busy = false,
+            )
+        }
+        scan(items)
     }
 
     /**
      * Check eligibility one item at a time, publishing hits as they are found.
      *
-     * Lazy and incremental on purpose. An item is only usable if it has both an
-     * `sd` trick-play index **and** a subtitle stream with a non-null key —
-     * most SRT streams are embedded and cannot be fetched separately — and that
-     * takes a metadata request each. Measured: 23 ms per check, so a 157-episode
-     * show is close to four seconds. The G2 app fetched the whole library up
-     * front in batches of 20 and made you wait for all of it.
+     * Lazy and incremental on purpose. On Plex it is a metadata request each —
+     * measured at 23 ms, so a 157-episode show is close to four seconds — and
+     * an item is only usable if it has both halves. Jellyfin answers for free
+     * because the listing already carried the fields, but the shape is the same
+     * and the provider is the one that knows.
      */
-    private fun scan(items: List<PlexLibrary.Item>) {
+    private fun scan(items: List<BrowseItem>) {
         scanJob?.cancel()
-        _state.update { it.copy(playable = emptyList(), scanned = 0, toScan = items.size) }
+        if (items.isEmpty()) return
         scanJob = viewModelScope.launch {
-            val lib = library ?: return@launch
+            val acc = account ?: return@launch
             for (item in items) {
                 val p = try {
-                    withContext(Dispatchers.IO) { lib.playable(item.itemId) }
+                    withContext(Dispatchers.IO) { acc.resolvePlayable(item) }
                 } catch (e: Exception) { null }
                 _state.update { s ->
                     s.copy(
@@ -269,61 +393,100 @@ class ConfigViewModel(app: Application) : AndroidViewModel(app) {
 
     // -------------------------------------------------------------- choose
 
-    fun choose(item: PlexLibrary.Item, play: PlexLibrary.Playable) {
+    fun choose(item: BrowseItem, play: Playable) {
+        val acc = account ?: return
         val s = server ?: return
-        val uri = route ?: return
-        settings.episode = Settings.Episode(
-            server = uri,
-            routes = routes.ifEmpty { listOf(uri) },
-            token = s.accessToken,
-            timelineRef = play.timelineRef,
-            subtitleRef = play.subtitleRef,
-            title = play.title.ifEmpty { item.title },
-            skipSilent = true,
-        )
+        val saved = acc.persist()
+        val route = saved["server"] ?: s.routes.firstOrNull() ?: return
+
+        // Unwrapping the refs is the one thing this layer is allowed to do with
+        // them, and only to write them down: a config has to survive the
+        // process, and the provider is the one that says what it needs back.
+        val episode = when (val ref = play.timelineRef) {
+            is PlexSource.PlexTimelineRef -> Settings.Episode(
+                server = route,
+                routes = s.routes.ifEmpty { listOf(route) },
+                token = s.accessToken,
+                timelineRef = ref.partId,
+                subtitleRef = (play.subtitleRef as? PlexSource.PlexSubtitleRef)?.key.orEmpty(),
+                title = play.title.ifEmpty { item.title },
+                skipSilent = true,
+                provider = Settings.Provider.PLEX,
+            )
+
+            is JellyfinSource.JellyfinTimelineRef -> {
+                val sub = play.subtitleRef as? JellyfinSource.JellyfinSubtitleRef
+                Settings.Episode(
+                    server = route,
+                    routes = listOf(route),
+                    token = saved["token"].orEmpty(),
+                    timelineRef = -1L,
+                    subtitleRef = "",
+                    title = play.title.ifEmpty { item.title },
+                    skipSilent = true,
+                    provider = Settings.Provider.JELLYFIN,
+                    trickplay = Settings.Trickplay(
+                        itemId = ref.itemId,
+                        mediaSourceId = sub?.mediaSourceId.orEmpty(),
+                        width = ref.width,
+                        tileWidth = ref.geometry.tileWidth,
+                        tileHeight = ref.geometry.tileHeight,
+                        thumbWidth = ref.geometry.thumbWidth,
+                        thumbHeight = ref.geometry.thumbHeight,
+                        intervalMs = ref.geometry.intervalMs,
+                        thumbnailCount = ref.geometry.thumbnailCount,
+                        subtitleIndex = sub?.index ?: -1,
+                    ),
+                )
+            }
+
+            else -> return
+        }
+
+        settings.episode = episode
         scanJob?.cancel()
         SceneState.ensurePrefetch(ctx)
         SceneState.requestUpdate(ctx)
-        _state.update { it.copy(step = Step.Done(play.title.ifEmpty { item.title })) }
+        _state.update { it.copy(step = Step.Done(episode.title)) }
     }
 
     /**
      * Leave the confirmation screen and choose something else.
      *
      * Without this the app is a one-way trip: pick an episode, and the only way
-     * to pick a different one is to force-stop it. Goes back to the library list
-     * if a server is already connected, since re-racing routes to change episode
-     * is pointless work.
+     * to pick a different one is to force-stop it.
      */
-    fun pickAnother() {
-        _state.update {
-            it.copy(
-                step = if (library != null) Step.Libraries else Step.Servers,
-                playable = emptyList(),
-                scanned = 0,
-                toScan = 0,
-                error = null,
-            )
-        }
+    fun pickAnother() = bg {
+        stack.clear()
+        if (account != null) loadRoots()
+        else _state.update { it.copy(step = Step.AddProvider, busy = false) }
     }
 
-    fun back() {
-        _state.update { s ->
-            when (s.step) {
-                is Step.Items -> s.copy(step = if (s.shows.isEmpty()) Step.Libraries else Step.Shows)
-                Step.Shows -> s.copy(step = Step.Libraries)
-                Step.Libraries -> s.copy(step = Step.Servers)
-                else -> s
+    fun back() = bg {
+        when (_state.value.step) {
+            is Step.Items -> {
+                scanJob?.cancel()
+                stack.removeLastOrNull()
+                if (stack.isEmpty()) loadRoots() else showLevel()
             }
+            // With one source the sources step does not exist to go back to.
+            Step.Browse ->
+                if (settings.sources.size > 1) showSources()
+                else _state.update { it.copy(busy = false) }
+            Step.Servers, Step.AddAddress, is Step.Linking -> {
+                // Abandoning a sign-in abandons the code with it; leaving it
+                // persisted would resume a flow the user just backed out of.
+                pollJob?.cancel()
+                settings.pendingAuth = null
+                attempt = null
+                _state.update { it.copy(step = Step.AddProvider, busy = false, error = null) }
+            }
+            else -> _state.update { it.copy(busy = false) }
         }
     }
 
     override fun onCleared() {
         pollJob?.cancel()
         scanJob?.cancel()
-    }
-
-    private companion object {
-        /** 3 s apart; plex.tv PINs last a few minutes. */
     }
 }

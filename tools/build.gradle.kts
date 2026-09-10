@@ -25,6 +25,14 @@ tasks.register<JavaExec>("runDiscover") {
     workingDir = rootDir
 }
 
+tasks.register<JavaExec>("runJellyfin") {
+    group = "application"
+    description = "Exercise the Jellyfin provider end to end against a real server"
+    mainClass.set("com.lukemeyer.bif.tools.JellyfinPipelineKt")
+    classpath = sourceSets["main"].runtimeClasspath
+    workingDir = rootDir
+}
+
 tasks.register<JavaExec>("runSubs") {
     group = "application"
     description = "Investigate whether embedded subtitle streams can be fetched"

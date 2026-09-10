@@ -67,6 +67,27 @@ object Srt {
     private fun clean(s: String) = s.replace(TAGS, "").replace(BRACES, "").trim()
 
     /** @return cues in file order. */
+    /**
+     * Cues back to SRT text.
+     *
+     * The inverse of [parse], and it exists so a caller with parsed cues can
+     * cache them in the format the parser already reads rather than inventing a
+     * serialisation for the purpose. Round-trips: [parse] of this yields the
+     * same cues, because cleaning is idempotent — text that has already had its
+     * tags stripped has nothing left to strip.
+     */
+    fun format(cues: List<Cue>): String = buildString {
+        cues.forEachIndexed { i, c ->
+            append(i + 1).append('\n')
+            append(stamp(c.startMs)).append(" --> ").append(stamp(c.endMs)).append('\n')
+            append(c.text).append("\n\n")
+        }
+    }
+
+    private fun stamp(ms: Long): String = "%02d:%02d:%02d,%03d".format(
+        ms / 3_600_000, (ms / 60_000) % 60, (ms / 1000) % 60, ms % 1000,
+    )
+
     fun parse(text: String): List<Cue> {
         val out = ArrayList<Cue>()
         val norm = text.replace("\r\n", "\n").replace('\r', '\n')

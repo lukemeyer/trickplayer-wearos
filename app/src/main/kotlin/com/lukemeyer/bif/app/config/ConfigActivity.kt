@@ -33,9 +33,13 @@ class ConfigActivity : ComponentActivity() {
     @Deprecated("Wear OS swipe-to-dismiss routes through this")
     override fun onBackPressed() {
         val step = vm.state.value.step
+        // Anything reached from the provider choice has somewhere to go back
+        // to; the provider choice itself is where the app ends.
         val nested = step is ConfigViewModel.Step.Items ||
-            step == ConfigViewModel.Step.Shows ||
-            step == ConfigViewModel.Step.Libraries
+            step is ConfigViewModel.Step.Linking ||
+            step == ConfigViewModel.Step.Browse ||
+            step == ConfigViewModel.Step.Servers ||
+            step == ConfigViewModel.Step.AddAddress
         if (nested) vm.back() else @Suppress("DEPRECATION") super.onBackPressed()
     }
 }

@@ -17,6 +17,37 @@ class Settings(context: Context) {
     private val prefs =
         context.applicationContext.getSharedPreferences("bif.settings", Context.MODE_PRIVATE)
 
+    /**
+     * Which provider this episode came from.
+     *
+     * Absent means Plex, because every config written before there was a second
+     * provider is one — reading it as anything else would orphan an existing
+     * watch's setup, which is the same reason the key strings below are frozen.
+     */
+    enum class Provider { PLEX, JELLYFIN }
+
+    /**
+     * What Jellyfin needs to rebuild a source, and Plex does not have.
+     *
+     * A tile-sheet source is not addressed by a part id and a subtitle path: it
+     * needs the item, the media source, the chosen width and the whole geometry
+     * (F-038). Stored as its own block rather than by widening the Plex fields,
+     * because "timelineRef, but sometimes it means something else" is how a
+     * seam gets quietly undone.
+     */
+    data class Trickplay(
+        val itemId: String,
+        val mediaSourceId: String,
+        val width: Int,
+        val tileWidth: Int,
+        val tileHeight: Int,
+        val thumbWidth: Int,
+        val thumbHeight: Int,
+        val intervalMs: Long,
+        val thumbnailCount: Int,
+        val subtitleIndex: Int,
+    )
+
     data class Episode(
         /** The route currently believed to work. */
         val server: String,
@@ -36,22 +67,51 @@ class Settings(context: Context) {
         val subtitleRef: String,
         val title: String,
         val skipSilent: Boolean,
+        val provider: Provider = Provider.PLEX,
+        /** Jellyfin only. Null on Plex, where the two refs above are enough. */
+        val trickplay: Trickplay? = null,
     ) {
         /**
          * Identifies the cached encoding. Changing episode or scene granularity
          * changes this, so stale scenes can never be served for the new one —
          * the same job `cache.setProfile(timelineRef, w, h, depth)` did on Pebble.
          */
-        val profile: String get() = "$timelineRef.$SCENE_POLICY"
+        val profile: String get() =
+            if (provider == Provider.JELLYFIN && trickplay != null) {
+                "jf-${trickplay.itemId}.${trickplay.width}.$SCENE_POLICY"
+            } else {
+                "$timelineRef.$SCENE_POLICY"
+            }
     }
 
     var episode: Episode?
         get() {
             val server = prefs.getString(K_SERVER, null) ?: return null
             val token = prefs.getString(K_TOKEN, null) ?: return null
+            val provider =
+                if (prefs.getString(K_PROVIDER, null) == "jellyfin") Provider.JELLYFIN
+                else Provider.PLEX
+            val trickplay = if (provider == Provider.JELLYFIN) {
+                Trickplay(
+                    itemId = prefs.getString(K_JF_ITEM, null) ?: return null,
+                    mediaSourceId = prefs.getString(K_JF_MEDIA, "").orEmpty(),
+                    width = prefs.getInt(K_JF_WIDTH, 0),
+                    tileWidth = prefs.getInt(K_JF_TILE_W, 0),
+                    tileHeight = prefs.getInt(K_JF_TILE_H, 0),
+                    thumbWidth = prefs.getInt(K_JF_THUMB_W, 0),
+                    thumbHeight = prefs.getInt(K_JF_THUMB_H, 0),
+                    intervalMs = prefs.getLong(K_JF_INTERVAL, 0L),
+                    thumbnailCount = prefs.getInt(K_JF_COUNT, 0),
+                    subtitleIndex = prefs.getInt(K_JF_SUB_INDEX, -1),
+                )
+            } else null
+            // A Plex config is identified by its part id; a Jellyfin one has no
+            // such number and must not be rejected for lacking it.
             val timelineRef = prefs.getLong(K_PART, -1L)
-            if (timelineRef < 0) return null
+            if (provider == Provider.PLEX && timelineRef < 0) return null
             return Episode(
+                provider = provider,
+                trickplay = trickplay,
                 server = server,
                 token = token,
                 timelineRef = timelineRef,
@@ -66,7 +126,18 @@ class Settings(context: Context) {
         set(v) {
             prefs.edit().apply {
                 if (v == null) {
-                    clear()
+                    // Remove the episode, not the file. A blanket clear() used
+                    // to be harmless because the episode was all there was;
+                    // it now shares these prefs with the saved sources, and
+                    // signing out of an episode must not sign the watch out of
+                    // its servers.
+                    listOf(
+                        K_SERVER, K_ROUTES, K_TOKEN, K_PART, K_SUBKEY, K_TITLE,
+                        K_SKIP_SILENT, K_SCENE, K_CUE, K_PROVIDER,
+                        K_JF_ITEM, K_JF_MEDIA, K_JF_WIDTH, K_JF_TILE_W, K_JF_TILE_H,
+                        K_JF_THUMB_W, K_JF_THUMB_H, K_JF_INTERVAL, K_JF_COUNT,
+                        K_JF_SUB_INDEX,
+                    ).forEach { remove(it) }
                 } else {
                     putString(K_SERVER, v.server)
                     putString(K_ROUTES, v.routes.joinToString("\n"))
@@ -75,6 +146,19 @@ class Settings(context: Context) {
                     putString(K_SUBKEY, v.subtitleRef)
                     putString(K_TITLE, v.title)
                     putBoolean(K_SKIP_SILENT, v.skipSilent)
+                    putString(K_PROVIDER, if (v.provider == Provider.JELLYFIN) "jellyfin" else "plex")
+                    v.trickplay?.let { t ->
+                        putString(K_JF_ITEM, t.itemId)
+                        putString(K_JF_MEDIA, t.mediaSourceId)
+                        putInt(K_JF_WIDTH, t.width)
+                        putInt(K_JF_TILE_W, t.tileWidth)
+                        putInt(K_JF_TILE_H, t.tileHeight)
+                        putInt(K_JF_THUMB_W, t.thumbWidth)
+                        putInt(K_JF_THUMB_H, t.thumbHeight)
+                        putLong(K_JF_INTERVAL, t.intervalMs)
+                        putInt(K_JF_COUNT, t.thumbnailCount)
+                        putInt(K_JF_SUB_INDEX, t.subtitleIndex)
+                    }
                     // A new episode invalidates the position, not just the cache.
                     putInt(K_SCENE, 0)
                     putInt(K_CUE, 0)
@@ -193,6 +277,75 @@ class Settings(context: Context) {
         fun isLive(nowMs: Long) = nowMs < expiresAtMs
     }
 
+    /**
+     * The servers this watch is signed in to — provider, address, credential.
+     *
+     * Saved whole, and on Jellyfin that is not a convenience: the address IS the
+     * identity, there is no account service to rebuild it from, and asking
+     * someone to dictate `http://192.168.1.10:8096` to a watch a second time is
+     * not a recovery path (UI.md §1).
+     *
+     * Stored as the flat string maps the accounts hand back, one per line of
+     * `key\tvalue`, records separated by a form feed. A map is what
+     * `MediaAccount.persist()` returns precisely so this layer does not have to
+     * know which provider's fields it is holding.
+     */
+    var sources: List<Map<String, String>>
+        get() = prefs.getString(K_SOURCES, null)
+            ?.split('\u000c')
+            ?.filter { it.isNotBlank() }
+            ?.map { rec ->
+                rec.split('\n').mapNotNull { line ->
+                    val i = line.indexOf('\t')
+                    if (i < 0) null else line.substring(0, i) to line.substring(i + 1)
+                }.toMap()
+            }
+            ?: emptyList()
+        set(v) {
+            prefs.edit().putString(
+                K_SOURCES,
+                v.joinToString("\u000c") { rec ->
+                    rec.entries.joinToString("\n") { "${it.key}\t${it.value}" }
+                },
+            ).apply()
+        }
+
+    /** Add or replace one, keyed by provider and server id. */
+    fun saveSource(record: Map<String, String>) {
+        val id = record["provider"] to record["id"]
+        sources = sources.filterNot { (it["provider"] to it["id"]) == id } + listOf(record)
+        lastSourceId = "${record["provider"]}:${record["id"]}"
+    }
+
+    /** The last-used source is the default, and browsing starts there. */
+    var lastSourceId: String?
+        get() = prefs.getString(K_LAST_SOURCE, null)
+        set(v) = prefs.edit().putString(K_LAST_SOURCE, v).apply()
+
+    /**
+     * A sign-in in flight, whichever provider it belongs to.
+     *
+     * Generalised from [PendingPin] for the same reason it existed: the code is
+     * typed on another device, so this activity may not survive the trip
+     * (F-018). Quick Connect has a secret rather than a pin id, which is why
+     * this is a map and not two more columns.
+     */
+    var pendingAuth: Map<String, String>?
+        get() = prefs.getString(K_PENDING_AUTH, null)
+            ?.split('\n')
+            ?.mapNotNull { line ->
+                val i = line.indexOf('\t')
+                if (i < 0) null else line.substring(0, i) to line.substring(i + 1)
+            }
+            ?.toMap()
+            ?.takeIf { it.isNotEmpty() }
+        set(v) {
+            prefs.edit().apply {
+                if (v == null) remove(K_PENDING_AUTH)
+                else putString(K_PENDING_AUTH, v.entries.joinToString("\n") { "${it.key}\t${it.value}" })
+            }.apply()
+        }
+
     var pendingPin: PendingPin?
         get() {
             val id = prefs.getLong(K_PIN_ID, -1L)
@@ -244,6 +397,23 @@ class Settings(context: Context) {
         const val K_TL_HORIZON = "timelineHorizonMs"
         const val K_TL_START = "timelineStartMs"
         const val K_LAST_ERROR = "lastError"
+        // New keys only. The ones above are frozen: renaming a stored key
+        // silently orphans an existing watch's configuration.
+        const val K_PROVIDER = "provider"
+        const val K_SOURCES = "sources"
+        const val K_LAST_SOURCE = "lastSourceId"
+        const val K_PENDING_AUTH = "pendingAuth"
+        const val K_JF_ITEM = "jfItemId"
+        const val K_JF_MEDIA = "jfMediaSourceId"
+        const val K_JF_WIDTH = "jfWidth"
+        const val K_JF_TILE_W = "jfTileWidth"
+        const val K_JF_TILE_H = "jfTileHeight"
+        const val K_JF_THUMB_W = "jfThumbWidth"
+        const val K_JF_THUMB_H = "jfThumbHeight"
+        const val K_JF_INTERVAL = "jfIntervalMs"
+        const val K_JF_COUNT = "jfThumbnailCount"
+        const val K_JF_SUB_INDEX = "jfSubtitleIndex"
+
         const val K_PIN_ID = "pinId"
         const val K_PIN_CODE = "pinCode"
         const val K_PIN_EXPIRES = "pinExpiresAtMs"
