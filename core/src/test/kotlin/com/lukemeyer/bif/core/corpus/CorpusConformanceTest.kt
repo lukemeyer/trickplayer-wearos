@@ -1,6 +1,7 @@
 package com.lukemeyer.bif.core.corpus
 
 import com.lukemeyer.bif.core.subs.Srt
+import com.lukemeyer.bif.core.scene.Episode
 import com.lukemeyer.bif.core.timeline.Timeline
 import kotlinx.serialization.json.*
 import org.junit.jupiter.api.Assertions.*
@@ -196,6 +197,45 @@ class CorpusConformanceTest {
                 "neither: Timeline.pickFrames takes the first frame at or after " +
                 "each interval boundary. Adopting F-001 is PLAN.md Phase 2.",
         )
+    }
+
+    @Test
+    @DisplayName("scene: blank filtering and the usable floor")
+    fun sceneFilter() {
+        val exp = obj("scene/filter.cases.json")
+        for (e in exp["cases"]!!.jsonArray) {
+            val c = e.jsonObject
+            val name = c["name"]!!.jsonPrimitive.content
+            val lengths = c["lengths"]!!.jsonArray.map { it.jsonPrimitive.int }
+            val pct = c["blankThresholdPct"]!!.jsonPrimitive.int
+            val wantMedian = c["expectMedianLength"]!!.jsonPrimitive.double
+            val wantUsable = c["expectUsableIndices"]!!.jsonArray.map { it.jsonPrimitive.int }
+
+            val index = lengths.mapIndexed { i, len ->
+                Timeline.FrameRef(tsMs = i * 2000L, offset = 0, length = len)
+            }
+            val ep = Episode(
+                index = index,
+                picked = index.indices.toList(),
+                cues = emptyList(),
+                intervalMs = 10_000,
+                skipSilent = false,
+            )
+            // Assert the threshold directly rather than recovering the median
+            // by division: blankThresholdBytes truncates to Int, so dividing
+            // back out reports a median a few bytes light and turns an exact
+            // agreement into a spurious failure.
+            val wantThreshold = (wantMedian * pct / 100.0).toInt()
+            assertEquals(
+                wantThreshold, ep.blankThresholdBytes,
+                "$name: blank threshold (median $wantMedian at $pct%)",
+            )
+            assertEquals(
+                wantUsable,
+                index.indices.filter { !ep.isNearBlank(it) },
+                "$name: usable",
+            )
+        }
     }
 
     // ---------------------------------------------------------------- cues

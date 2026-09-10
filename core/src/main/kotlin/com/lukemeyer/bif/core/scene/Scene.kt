@@ -62,7 +62,21 @@ class Episode(
      * number, so it travels to content with different encoding settings.
      */
     val blankThresholdBytes: Int = if (index.isEmpty()) 0 else {
-        val median = index.map { it.length }.sorted()[index.size / 2]
+        // Mean of the two middle values for an even-length list, NOT
+        // sorted[size / 2]. This used to take the upper middle, which differs
+        // from the Pebble build and the Timeline Tuner by half the gap between
+        // the two central frames — 250 bytes of median, 37 bytes of threshold,
+        // on the conformance fixture. No frame happened to sit in that band, so
+        // nothing visibly broke; a frame around 12% of median eventually will,
+        // and one platform would drop it while another kept it. See
+        // trickplayer-knowledge findings/F-034.
+        val sorted = index.map { it.length }.sorted()
+        val mid = sorted.size / 2
+        val median = if (sorted.size % 2 == 0) {
+            (sorted[mid - 1] + sorted[mid]) / 2.0
+        } else {
+            sorted[mid].toDouble()
+        }
         (median * 0.15).toInt()
     }
 
