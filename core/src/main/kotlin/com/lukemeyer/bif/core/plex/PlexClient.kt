@@ -74,6 +74,13 @@ class PlexClient(
         }
     }
 
+    /**
+     * Raw bytes of a text resource. Callers decode — a subtitle sidecar's
+     * encoding is sniffed from its BOM rather than assumed (F-035), so this
+     * deliberately does not guess a charset.
+     */
+    fun getTextBytes(url: String): ByteArray = getRange(url)
+
     fun getText(url: String): String = String(getRange(url), Charsets.UTF_8)
 
     /**

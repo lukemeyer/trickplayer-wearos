@@ -106,7 +106,7 @@ class EpisodeRepository private constructor(
         val srt = subsFile.takeIf { it.exists() }?.readText() ?: run {
             if (config.subtitleRef.isEmpty()) "" else {
                 viaAnyRoute("subtitles") { uri ->
-                    plex.getText(plex.subtitleUrl(uri, config.subtitleRef))
+                    Srt.decodeBytes(plex.getTextBytes(plex.subtitleUrl(uri, config.subtitleRef)))
                 }?.also { subsFile.writeText(it) } ?: ""
             }
         }

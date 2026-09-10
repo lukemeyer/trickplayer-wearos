@@ -185,6 +185,37 @@ class CorpusConformanceTest {
         }
     }
 
+    @Test
+    @DisplayName("subs: encoding is sniffed from the BOM, not assumed")
+    fun subtitleEncodings() {
+        val exp = obj("subs/torture.expected.json")
+        val enc = obj("subs/encodings.expected.json")
+        val expected = exp["cues"]!!.jsonArray.map {
+            val c = it.jsonObject
+            Triple(
+                c["startMs"]!!.jsonPrimitive.long,
+                c["endMs"]!!.jsonPrimitive.long,
+                c["text"]!!.jsonPrimitive.content,
+            )
+        }
+
+        for (v in enc["variants"]!!.jsonArray) {
+            val file = v.jsonObject["file"]!!.jsonPrimitive.content
+            val bytes = File(corpus, file.removePrefix("subs/").let { "subs/$it" }).readBytes()
+            val cues = Srt.parse(Srt.decodeBytes(bytes))
+            assertEquals(expected.size, cues.size, "$file: cueCount")
+            cues.forEachIndexed { i, c ->
+                assertEquals(expected[i].first, c.startMs, "$file cue $i startMs")
+                assertEquals(expected[i].second, c.endMs, "$file cue $i endMs")
+                assertEquals(expected[i].third, c.text, "$file cue $i text")
+            }
+        }
+
+        // A plain UTF-8 file with no BOM must still decode.
+        val plain = Srt.parse(Srt.decodeBytes(File(corpus, "subs/torture.srt").readBytes()))
+        assertEquals(expected.size, plain.size, "no BOM still decodes as UTF-8")
+    }
+
     // --------------------------------------------------------------- scene
 
     @Test
