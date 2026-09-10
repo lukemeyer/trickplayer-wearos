@@ -51,7 +51,12 @@ class PlexTv(
         .build()
 
 
-    data class Pin(val id: Long, val code: String)
+    /**
+     * @param expiresInSeconds how long plex.tv says this PIN lives — around
+     *   13 minutes. Read from the response rather than assumed, so "that code
+     *   expired" is a fact rather than a guess from a poll count.
+     */
+    data class Pin(val id: Long, val code: String, val expiresInSeconds: Long)
 
     /** One reachable route to one server. */
     data class Connection(
@@ -93,6 +98,13 @@ class PlexTv(
         header("X-Plex-Platform", "Android")
     }
 
+    /**
+     * Fallback when plex.tv does not state a lifetime. Its PINs have been
+     * about 13 minutes for years, but nothing promises that, which is why the
+     * response is read first.
+     */
+    private val DEFAULT_PIN_TTL_SECONDS = 13L * 60
+
     /** Mint a PIN. The user enters [Pin.code] at plex.tv/link. */
     fun createPin(): Pin {
         val req = Request.Builder()
@@ -104,7 +116,8 @@ class PlexTv(
             val body = res.body?.string().orEmpty()
             if (!res.isSuccessful) throw IOException("createPin: HTTP ${res.code} $body")
             val o = json.parseToJsonElement(body).jsonObject
-            return Pin(o.long("id"), o.str("code"))
+            val ttl = o["expiresIn"]?.jsonPrimitive?.longOrNull ?: DEFAULT_PIN_TTL_SECONDS
+            return Pin(o.long("id"), o.str("code"), ttl)
         }
     }
 

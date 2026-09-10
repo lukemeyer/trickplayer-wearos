@@ -58,6 +58,8 @@ class ConfigViewModel(app: Application) : AndroidViewModel(app) {
 
     private val ctx: Context get() = getApplication()
     private val settings = Settings(ctx)
+    private var pendingPinId: Long? = null
+    private var pendingPinExpiresAtMs: Long? = null
 
     /**
      * Stable per install, and it must be: plex.tv ties both the PIN and the
@@ -103,26 +105,87 @@ class ConfigViewModel(app: Application) : AndroidViewModel(app) {
     // ------------------------------------------------------------- sign in
 
     fun signIn() = bg {
-        val pin = tv.createPin()
-        _state.update { it.copy(step = Step.Linking(pin.code), busy = false) }
+        // Resume a PIN that is still alive rather than minting a new one.
+        //
+        // The whole point of a short code is that it is typed at plex.tv/link
+        // on a *different* device, so the user walks away from the watch
+        // mid-flow and the activity may not survive that. Minting a fresh code
+        // on the way back silently invalidates the one they are looking at,
+        // and nothing on screen tells them why it never completes.
+        // See trickplayer-knowledge findings/F-018.
+        val now = System.currentTimeMillis()
+        val stored = settings.pendingPin?.takeIf { it.isLive(now) }
 
-        // Poll until linked or the PIN expires. Every three seconds: brisk
-        // enough to feel immediate, slow enough not to hammer plex.tv.
+        val pinId: Long
+        val code: String
+        val expiresAtMs: Long
+        if (stored != null) {
+            pinId = stored.id
+            code = stored.code
+            expiresAtMs = stored.expiresAtMs
+        } else {
+            val minted = tv.createPin()
+            pinId = minted.id
+            code = minted.code
+            expiresAtMs = now + minted.expiresInSeconds * 1000
+            settings.pendingPin = Settings.PendingPin(pinId, code, expiresAtMs)
+        }
+
+        pendingPinId = pinId
+        pendingPinExpiresAtMs = expiresAtMs
+        _state.update { it.copy(step = Step.Linking(code), busy = false) }
+
         pollJob?.cancel()
         pollJob = viewModelScope.launch {
-            repeat(POLL_ATTEMPTS) {
+            // Poll until linked or the PIN actually expires — the expiry comes
+            // from plex.tv's own `expiresIn`, not from counting attempts, so a
+            // slow network cannot make a live code look dead or a dead one look
+            // live. Every three seconds: brisk enough to feel immediate, slow
+            // enough not to hammer plex.tv.
+            while (System.currentTimeMillis() < expiresAtMs) {
                 delay(3000)
-                val t = try {
-                    withContext(Dispatchers.IO) { tv.checkPin(pin.id) }
-                } catch (e: Exception) { null }
-                if (t != null) {
-                    token = t
-                    loadServers()
-                    return@launch
+                if (tryRedeem(pinId)) return@launch
+            }
+            settings.pendingPin = null
+            _state.update {
+                it.copy(error = "That code expired. Try again.", step = Step.SignIn)
+            }
+        }
+    }
+
+    /**
+     * "I have authorised it" — redeem now instead of waiting for the next poll.
+     *
+     * Nothing may depend on a timer alone. A watch can doze, and the activity
+     * can be stopped while the user is at another device typing the code; on
+     * the way back the poll loop may be seconds away or gone entirely. An
+     * explicit action is the escape hatch that makes the flow finish.
+     */
+    fun checkNow() = bg {
+        val id = pendingPinId ?: return@bg
+        if (!tryRedeem(id)) {
+            val expired = System.currentTimeMillis() >= (pendingPinExpiresAtMs ?: 0L)
+            _state.update {
+                if (expired) {
+                    settings.pendingPin = null
+                    it.copy(error = "That code expired. Try again.", step = Step.SignIn, busy = false)
+                } else {
+                    it.copy(error = "Not linked yet — finish at plex.tv/link.", busy = false)
                 }
             }
-            _state.update { it.copy(error = "That code expired. Try again.", step = Step.SignIn) }
         }
+    }
+
+    /** @return true if the PIN has been linked and a token is now held. */
+    private suspend fun tryRedeem(pinId: Long): Boolean {
+        val t = try {
+            withContext(Dispatchers.IO) { tv.checkPin(pinId) }
+        } catch (e: Exception) { null } ?: return false
+        token = t
+        settings.pendingPin = null
+        pendingPinId = null
+        loadServers()
+        return true
     }
 
     // ----------------------------------------------------------- discovery
@@ -263,6 +326,5 @@ class ConfigViewModel(app: Application) : AndroidViewModel(app) {
 
     private companion object {
         /** 3 s apart; plex.tv PINs last a few minutes. */
-        const val POLL_ATTEMPTS = 100
     }
 }

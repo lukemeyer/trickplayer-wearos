@@ -182,6 +182,42 @@ class Settings(context: Context) {
         get() = prefs.getLong(K_TL_START, 0L)
         set(v) = prefs.edit().putLong(K_TL_START, v).apply()
 
+    /**
+     * The sign-in PIN in flight, if any.
+     *
+     * Persisted because the config activity does not necessarily survive the
+     * user walking away to type the code at plex.tv/link on another device —
+     * which is the whole point of a short PIN. See
+     * trickplayer-knowledge findings/F-018. Minting a fresh one
+     * on the way back strands them on a code that is no longer being polled,
+     * and they have no way to tell.
+     */
+    data class PendingPin(val id: Long, val code: String, val expiresAtMs: Long) {
+        fun isLive(nowMs: Long) = nowMs < expiresAtMs
+    }
+
+    var pendingPin: PendingPin?
+        get() {
+            val id = prefs.getLong(K_PIN_ID, -1L)
+            if (id < 0) return null
+            return PendingPin(
+                id = id,
+                code = prefs.getString(K_PIN_CODE, "").orEmpty(),
+                expiresAtMs = prefs.getLong(K_PIN_EXPIRES, 0L),
+            )
+        }
+        set(v) {
+            prefs.edit().apply {
+                if (v == null) {
+                    remove(K_PIN_ID); remove(K_PIN_CODE); remove(K_PIN_EXPIRES)
+                } else {
+                    putLong(K_PIN_ID, v.id)
+                    putString(K_PIN_CODE, v.code)
+                    putLong(K_PIN_EXPIRES, v.expiresAtMs)
+                }
+            }.apply()
+        }
+
     private companion object {
         const val K_SERVER = "server"
         const val K_ROUTES = "routes"
@@ -199,5 +235,8 @@ class Settings(context: Context) {
         const val K_TL_HORIZON = "timelineHorizonMs"
         const val K_TL_START = "timelineStartMs"
         const val K_LAST_ERROR = "lastError"
+        const val K_PIN_ID = "pinId"
+        const val K_PIN_CODE = "pinCode"
+        const val K_PIN_EXPIRES = "pinExpiresAtMs"
     }
 }

@@ -38,7 +38,7 @@ fun ConfigScreen(state: ConfigViewModel.State, vm: ConfigViewModel) {
         TimeText()
         when (val step = state.step) {
             ConfigViewModel.Step.SignIn -> SignIn(state, vm)
-            is ConfigViewModel.Step.Linking -> Linking(step.code)
+            is ConfigViewModel.Step.Linking -> Linking(step.code, state, vm)
             ConfigViewModel.Step.Servers -> Servers(state, vm)
             ConfigViewModel.Step.Libraries -> Libraries(state, vm)
             ConfigViewModel.Step.Shows -> Shows(state, vm)
@@ -85,7 +85,11 @@ private fun SignIn(state: ConfigViewModel.State, vm: ConfigViewModel) = Centered
  * the typing happens somewhere else entirely.
  */
 @Composable
-private fun Linking(code: String) = Centered {
+private fun Linking(
+    code: String,
+    state: ConfigViewModel.State,
+    vm: ConfigViewModel,
+) = Centered {
     Text("Go to", style = MaterialTheme.typography.caption2)
     Text("plex.tv/link", style = MaterialTheme.typography.title3, textAlign = TextAlign.Center)
     Text(
@@ -95,10 +99,20 @@ private fun Linking(code: String) = Centered {
         modifier = Modifier.padding(vertical = 6.dp),
     )
     Text(
-        "and enter this code",
+        state.error ?: "and enter this code",
         style = MaterialTheme.typography.caption2,
         textAlign = TextAlign.Center,
         color = MaterialTheme.colors.onSurfaceVariant,
+    )
+    // Nothing may depend on a timer alone. The user types this code on another
+    // device, so the watch may have dozed or the activity been stopped by the
+    // time they come back — the poll loop can be seconds away or gone. This is
+    // the escape hatch that lets them finish the flow themselves.
+    // See trickplayer-knowledge findings/F-018.
+    Chip(
+        onClick = { vm.checkNow() },
+        label = { Text("I've entered it") },
+        modifier = Modifier.padding(top = 10.dp),
     )
 }
 
