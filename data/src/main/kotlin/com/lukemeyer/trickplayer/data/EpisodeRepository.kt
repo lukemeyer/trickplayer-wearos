@@ -222,7 +222,7 @@ class EpisodeRepository private constructor(
         // four lines. Against a real film's 1,581 cues that leaves 5.2% of them
         // needing a second page; at the old 280 width it was 13.3%.
         val cues = ep.cuesFor(r.scene)
-            .flatMap { CueLayout.paddedPagesOf(it, WRAP_CHARS, LINE_CHARS, LINES_PER_PAGE) }
+            .flatMap { CueLayout.paddedPagesOf(it, WRAP_CHARS, LINE_CHARS, LINES_PER_PAGE, INDENTED_LINES) }
             .ifEmpty { listOf(fmtTime(ent.tsMs)) }
         Log.i(TAG, "scene $sceneIndex -> frame ${r.frameIndex} @${ent.tsMs / 1000}s, " +
             "${jpeg.size} B, ${cues.size} cues")
@@ -259,6 +259,16 @@ class EpisodeRepository private constructor(
         private const val LINE_CHARS = 20
         private const val WRAP_CHARS = LINE_CHARS - 1
         private const val LINES_PER_PAGE = 4
+
+        /**
+         * The bottom line of a page starts one character in.
+         *
+         * A round face narrows towards the bottom, and the fourth line sits
+         * where a left-aligned band's left edge is already outside the circle —
+         * measured, its first character is clipped by the bezel. One cell of
+         * indent clears it, and only that line pays for it.
+         */
+        private val INDENTED_LINES = setOf(LINES_PER_PAGE - 1)
 
         /** Null when no episode has been configured yet. */
         fun open(context: Context): EpisodeRepository? {

@@ -11,7 +11,7 @@
 
       clock     y   6 ..  50     digital, hh:mm — no seconds shown
       frame     y  54 .. 246     PHOTO_IMAGE, 341x192 — 16:9, top corners cropped
-      subtitle  y 248 .. 408     LONG_TEXT, 320 wide, 32px Lekton, 4 lines of 20
+      subtitle  y 242 .. 434     LONG_TEXT, 320 wide, 32px Lekton, 4 lines of 20
 
   MEASURED, on a Pixel Watch 3, with a character ruler pushed through the
   subtitle complication — not calculated:
@@ -24,7 +24,7 @@
         full-width line would be concatenated onto the next with no separator
         and this element, which deletes newlines, would fuse the two words
         either side into one (F-045).
-      * `lineSpacing="1.2"` rather than the 1.5 default, which is what makes
+      * `lineSpacing="1.1"` rather than the 1.5 default, which is what makes
         four lines of 32px text fit under a full-size frame at all.
       * `verticalAlign` is documented and **rejected by this runtime** — adding
         it makes the face fail to load with "Something went wrong".
@@ -244,14 +244,14 @@
             slotId="2"
             displayName="Trickplayer subtitle"
             supportedTypes="LONG_TEXT SHORT_TEXT EMPTY"
-            x="65" y="248" width="320" height="192"
+            x="65" y="242" width="320" height="192"
             alpha="255">
 
             <BoundingBox x="0" y="0" width="320" height="192" />
 
             <Complication type="LONG_TEXT">
                 <PartText x="0" y="0" width="320" height="192">
-                    <Text align="START" maxLines="4" ellipsis="FALSE" lineSpacing="1.2">
+                    <Text align="START" maxLines="4" ellipsis="FALSE" lineSpacing="1.1">
                         <Font family="lekton" size="32" color="#FFFFFF">
                             <Template><![CDATA[%s]]><Parameter expression="[COMPLICATION.TEXT]" /></Template>
                         </Font>
@@ -261,7 +261,7 @@
 
             <Complication type="SHORT_TEXT">
                 <PartText x="0" y="0" width="320" height="192">
-                    <Text align="START" maxLines="2" ellipsis="FALSE" lineSpacing="1.2">
+                    <Text align="START" maxLines="2" ellipsis="FALSE" lineSpacing="1.1">
                         <Font family="lekton" size="32" color="#FFFFFF">
                             <Template><![CDATA[%s]]><Parameter expression="[COMPLICATION.TEXT]" /></Template>
                         </Font>

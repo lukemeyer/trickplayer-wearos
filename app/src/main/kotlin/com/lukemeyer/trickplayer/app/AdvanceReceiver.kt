@@ -30,6 +30,13 @@ class AdvanceReceiver : BroadcastReceiver() {
             // A tap cannot push a timeline; all it can do is ask the system to
             // come back and ask us. So the intent is written down, and the
             // request that follows finds it and builds the burst.
+            //
+            // Cut any live burst short first. A burst in flight is re-served
+            // unchanged by SceneTimeline, which is what keeps the two
+            // complications in step — so without this the tap would be ignored
+            // until the current one ran out. Consuming it credits exactly what
+            // played and clears the way for a new one from here.
+            SceneTimeline.consume(context)
             settings.autoplayUntilMs = System.currentTimeMillis() + settings.autoplayLengthMs
         } else {
             SceneState.advance(context, force = true, mode = settings.onTap)

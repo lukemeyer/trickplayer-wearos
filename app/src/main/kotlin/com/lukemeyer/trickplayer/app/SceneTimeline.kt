@@ -61,6 +61,26 @@ object SceneTimeline {
         val step = s.timelineStepMs.coerceAtLeast(1000)
         val horizon = s.autoplayLengthMs.coerceAtLeast(step)
 
+        // **A burst already in flight is re-served, not rebuilt.**
+        //
+        // Both complications ask for data independently, and nothing promises
+        // they ask at the same moment. The old code consumed elapsed time on
+        // every request and started a fresh burst from wherever that landed, so
+        // two requests a few seconds apart produced two DIFFERENT bursts — a
+        // frame from one moment under a cue from another, and a cursor that
+        // crept forward every time anything asked. Tapping during an autoplay
+        // made it obvious, because a tap asks.
+        //
+        // While a burst is live, every request gets that same burst, computed
+        // from the position and start time it was built with. Elapsed time is
+        // credited exactly once, when the burst is over or when a tap cuts it
+        // short.
+        val liveStart = s.timelineStartMs
+        if (liveStart > 0 && nowMs < liveStart + horizon) {
+            val live = burst(s.sceneIndex, s.cueIndex, liveStart, step, horizon, cache)
+            if (live.isNotEmpty()) return live
+        }
+
         // Catch up with whatever the last burst actually played BEFORE deciding
         // anything, or this moves forward from a stale position.
         consumePrevious(s, cache, nowMs, step)
@@ -72,11 +92,33 @@ object SceneTimeline {
 
         if (mode != Advance.AUTOPLAY) return single(s, cache, nowMs, horizon, mode)
 
-        var scene = s.sceneIndex
-        var cue = s.cueIndex
+        val steps = burst(s.sceneIndex, s.cueIndex, nowMs, step, horizon, cache)
+        if (steps.isNotEmpty()) {
+            s.timelineStartMs = nowMs
+            Log.i(TAG, "autoplay burst of ${steps.size} steps x ${step}ms from scene " +
+                "${s.sceneIndex} cue ${s.cueIndex}")
+        }
+        return steps
+    }
+
+    /**
+     * The steps a burst starting at [fromMs] consists of. Pure given the cache:
+     * the same arguments always give the same burst, which is what lets a live
+     * one be re-served rather than recomputed from a moved cursor.
+     */
+    private fun burst(
+        sceneIndex: Int,
+        cueIndex: Int,
+        fromMs: Long,
+        step: Long,
+        horizon: Long,
+        cache: SceneCache,
+    ): List<Step> {
+        var scene = sceneIndex
+        var cue = cueIndex
         val steps = ArrayList<Step>()
-        var t = nowMs
-        val end = nowMs + horizon
+        var t = fromMs
+        val end = fromMs + horizon
 
         while (t < end) {
             val e = cache.get(scene)
@@ -100,12 +142,6 @@ object SceneTimeline {
                 scene++
                 cue = 0
             }
-        }
-
-        if (steps.isNotEmpty()) {
-            s.timelineStartMs = nowMs
-            Log.i(TAG, "autoplay burst of ${steps.size} steps x ${step}ms from scene " +
-                "${s.sceneIndex} cue ${s.cueIndex} (through scene $scene cue $cue)")
         }
         return steps
     }

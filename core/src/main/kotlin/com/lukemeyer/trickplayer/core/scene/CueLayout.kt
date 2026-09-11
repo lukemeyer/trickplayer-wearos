@@ -93,6 +93,34 @@ object CueLayout {
         }.ifEmpty { listOf("") }
 
     /**
+     * Wrap where the budget is not the same on every line.
+     *
+     * Exists because a round screen is not a rectangle: the lowest line of a
+     * page sits where the circle has narrowed, so it needs to start a character
+     * further in and therefore has one character less to work with. Deciding
+     * that during the wrap is the only way to avoid losing a character to the
+     * bezel without losing one to a shorter budget everywhere else.
+     *
+     * @param widthOf the budget for a given 0-based line index.
+     */
+    fun wrapKeepingBreaks(text: String, widthOf: (Int) -> Int): List<String> {
+        val out = ArrayList<String>()
+        for (para in text.split("\n")) {
+            if (para.isBlank()) continue
+            var rest = para.trim()
+            while (rest.isNotEmpty()) {
+                val w = widthOf(out.size)
+                val taken = wrap(rest, w).firstOrNull() ?: break
+                out.add(taken)
+                // `wrap` may hard-break an oversized word, so step by what it
+                // actually consumed rather than assuming a space follows.
+                rest = rest.removePrefix(taken).trimStart()
+            }
+        }
+        return out.ifEmpty { listOf("") }
+    }
+
+    /**
      * One cue as pages, with every line **padded out to the full width**.
      *
      * This is how a break is forced through a renderer that deletes newline
@@ -112,11 +140,29 @@ object CueLayout {
         wrapWidth: Int,
         padWidth: Int,
         maxLinesPerPage: Int,
-    ): List<String> =
-        paginate(wrapKeepingBreaks(text, wrapWidth), maxLinesPerPage)
+        /**
+         * 0-based line indexes, within a page, that start one character in.
+         *
+         * For the bezel: the bottom line of a page on a round face is clipped
+         * at its left end, and one cell of indent clears it. Those lines are
+         * wrapped one character narrower so the indent costs nothing.
+         */
+        indentedLines: Set<Int> = emptySet(),
+    ): List<String> {
+        val indented = { i: Int -> (i % maxLinesPerPage) in indentedLines }
+        val lines = wrapKeepingBreaks(text) { i ->
+            if (indented(i)) wrapWidth - 1 else wrapWidth
+        }
+        // U+00A0, not a plain space: the renderer breaks the line AT the
+        // padding whitespace and trims what follows, so an ordinary leading
+        // space is swallowed and the indent never appears. A no-break space is
+        // not a break opportunity and survives to the start of the line.
+        return lines.mapIndexed { i, l -> if (indented(i)) "\u00A0$l" else l }
+            .let { paginate(it, maxLinesPerPage) }
             .map { page -> page.joinToString("") { it.padEnd(padWidth) }.trimEnd() }
             .filter { it.isNotBlank() }
             .ifEmpty { listOf(text) }
+    }
 
     /**
      * One cue as the pages a screen can actually show it in.
