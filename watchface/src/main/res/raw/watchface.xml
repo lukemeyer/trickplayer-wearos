@@ -73,10 +73,16 @@
   after that it would only ever fire on a mis-measurement, and when it does,
   three more readable characters beat three dots.
 
-  **This element deletes newlines.** Measured: "aaa bbb\nccc ddd" renders as
-  "aaa bbbccc ddd" — the break is removed and the words either side are joined
-  into one. Every cue therefore arrives with its lines already joined by spaces.
-  Do not pass raw SRT text to it.
+  **This element deletes newlines, and nothing can send one.** Measured: "aaa
+  bbb\nccc ddd" renders as "aaa bbbccc ddd" — the break is removed and the words
+  either side are joined into one. A newline written directly into this CDATA
+  behaves identically, which puts the behaviour in the RENDERER rather than in
+  the complication transport; `&#10;` stops the face loading at all; U+2028,
+  U+000B and U+2029 are all deleted the same way, and U+0085 draws a
+  missing-glyph box. It is undocumented. See F-045.
+
+  So every cue arrives with its lines already joined by spaces. Do not pass raw
+  SRT text to this element — it will invent words.
 
   AMBIENT
   =======
