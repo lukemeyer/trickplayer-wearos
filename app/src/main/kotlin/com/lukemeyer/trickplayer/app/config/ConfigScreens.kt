@@ -312,7 +312,14 @@ private fun Browse(state: ConfigViewModel.State, vm: ConfigViewModel) =
     ChipList(
         state.sourceName.ifEmpty { "Browse" },
         onBack = { vm.back() },
-        backLabel = if (state.sources.size > 1) "Servers" else "Close",
+        // Always "Servers", even with one saved.
+        //
+        // UI.md §1's rule is that the source step does not APPEAR when there is
+        // only one — it is not a screen you dismiss. That is about the opening
+        // flow, and it was being read as "there is no way to reach it", which
+        // stranded anyone who signed in to Jellyfin with no route back to Plex.
+        // Absent from the path, reachable on purpose.
+        backLabel = "Servers",
     ) {
         itemsIndexed(state.roots) { i, root ->
             Chip(

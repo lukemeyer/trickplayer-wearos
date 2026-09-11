@@ -181,12 +181,22 @@ class Episode(
         return size < blankThresholdBytes
     }
 
-    /** The cues belonging to this scene's window. */
+    /**
+     * The cues belonging to this scene's window, **with their own line breaks
+     * intact**.
+     *
+     * These used to be flattened to spaces here, on the reasoning that the face
+     * wraps text itself and an embedded newline would fight that. That was true
+     * while the renderer decided the lines. It stopped being true when this
+     * project started deciding them ([[F-002]], [[F-045]]): a caller that wraps
+     * to its own width needs to know where the author put a break, because
+     * "- Okay, Daddy." and "- No." belong on separate lines and no amount of
+     * re-wrapping recovers that once the newline is gone.
+     *
+     * Flattening is now the CALLER'S choice, made where the screen is known.
+     */
     fun cuesFor(scene: SceneRef): List<String> =
         Srt.cuesInWindow(cues, scene.windowStartMs, scene.windowEndMs)
-            // The face wraps text itself; a newline inside a single cue would
-            // fight that, so flatten to spaces and keep cues as the unit.
-            .map { it.replace('\n', ' ') }
 
     private companion object {
         /** Below this, the filters are doing more harm than good. */

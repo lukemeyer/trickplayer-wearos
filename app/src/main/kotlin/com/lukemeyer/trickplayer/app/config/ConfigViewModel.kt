@@ -209,7 +209,16 @@ class ConfigViewModel(app: Application) : AndroidViewModel(app) {
     // ------------------------------------------------------------- sources
 
     fun showSources() {
-        _state.update { it.copy(step = Step.Sources, sources = settings.sources, error = null) }
+        // busy = false matters: this is reached from back(), which runs inside
+        // bg { } and leaves the spinner up until a step handler clears it.
+        _state.update {
+            it.copy(
+                step = Step.Sources,
+                sources = settings.sources,
+                error = null,
+                busy = false,
+            )
+        }
     }
 
     fun addSource() {
@@ -595,12 +604,12 @@ class ConfigViewModel(app: Application) : AndroidViewModel(app) {
                 if (stack.isEmpty()) loadRoots() else showLevel()
             }
             Step.Options, is Step.Done -> loadRoots()
-            // With one source the sources step does not exist to go back to,
-            // so the only thing back can mean is leaving — which the activity
-            // does for us by not treating this as nested.
-            Step.Browse ->
-                if (settings.sources.size > 1) showSources()
-                else _state.update { it.copy(busy = false, finished = true) }
+            // Always reachable, however many are saved: it is the only way to
+            // add a second provider once the first has been signed in to.
+            Step.Browse -> showSources()
+
+            // And this is where the app ends, so back here means leave.
+            Step.Sources -> _state.update { it.copy(busy = false, finished = true) }
             Step.Servers, Step.AddAddress, is Step.Linking -> {
                 // Abandoning a sign-in abandons the code with it; leaving it
                 // persisted would resume a flow the user just backed out of.

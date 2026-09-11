@@ -80,6 +80,45 @@ object CueLayout {
     }
 
     /**
+     * Wrap, but treat the cue's own line breaks as breaks.
+     *
+     * [wrap] folds them into spaces, which is right when the renderer decides
+     * the lines anyway. It is wrong when the caller is deciding them — a
+     * two-speaker cue is the case that matters, where "- Hi!" and "- Ahoy!"
+     * belong on separate lines and joining them orphans a word.
+     */
+    fun wrapKeepingBreaks(text: String, maxCharsPerLine: Int): List<String> =
+        text.split("\n").flatMap { line ->
+            if (line.isBlank()) emptyList() else wrap(line, maxCharsPerLine)
+        }.ifEmpty { listOf("") }
+
+    /**
+     * One cue as pages, with every line **padded out to the full width**.
+     *
+     * This is how a break is forced through a renderer that deletes newline
+     * characters (F-045): a line padded to exactly the band's width leaves no
+     * room for the next word, so the renderer's own wrap breaks where this
+     * function decided. It only works in a fixed-width font, where character
+     * count is width.
+     *
+     * @param wrapWidth how many characters may carry text — deliberately ONE
+     *   LESS than [padWidth], so every line ends in at least one space. Without
+     *   that guarantee a full-width line would be concatenated directly onto
+     *   the next one and the renderer, seeing no separator, would fuse the two
+     *   words either side into a word that does not exist.
+     */
+    fun paddedPagesOf(
+        text: String,
+        wrapWidth: Int,
+        padWidth: Int,
+        maxLinesPerPage: Int,
+    ): List<String> =
+        paginate(wrapKeepingBreaks(text, wrapWidth), maxLinesPerPage)
+            .map { page -> page.joinToString("") { it.padEnd(padWidth) }.trimEnd() }
+            .filter { it.isNotBlank() }
+            .ifEmpty { listOf(text) }
+
+    /**
      * One cue as the pages a screen can actually show it in.
      *
      * Each page comes back as a single string with its lines joined by spaces,

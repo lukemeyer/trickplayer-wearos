@@ -222,7 +222,7 @@ class EpisodeRepository private constructor(
         // four lines. Against a real film's 1,581 cues that leaves 5.2% of them
         // needing a second page; at the old 280 width it was 13.3%.
         val cues = ep.cuesFor(r.scene)
-            .flatMap { CueLayout.pagesOf(it, CHARS_PER_LINE, LINES_PER_PAGE) }
+            .flatMap { CueLayout.paddedPagesOf(it, WRAP_CHARS, LINE_CHARS, LINES_PER_PAGE) }
             .ifEmpty { listOf(fmtTime(ent.tsMs)) }
         Log.i(TAG, "scene $sceneIndex -> frame ${r.frameIndex} @${ent.tsMs / 1000}s, " +
             "${jpeg.size} B, ${cues.size} cues")
@@ -251,7 +251,13 @@ class EpisodeRepository private constructor(
          * These are deliberately NOT in `:core`: they are a measurement of one
          * screen, and F-002 is the algorithm, not the numbers.
          */
-        private const val CHARS_PER_LINE = 18
+        /**
+         * The band is 20 Lekton characters wide at 32px. Text is wrapped to 19
+         * and padded to 20, so every line ends in at least one space — see
+         * [CueLayout.paddedPagesOf] for why that is not optional.
+         */
+        private const val LINE_CHARS = 20
+        private const val WRAP_CHARS = LINE_CHARS - 1
         private const val LINES_PER_PAGE = 4
 
         /** Null when no episode has been configured yet. */

@@ -11,16 +11,23 @@
 
       clock     y   6 ..  50     digital, hh:mm — no seconds shown
       frame     y  54 .. 246     PHOTO_IMAGE, 341x192 — 16:9, top corners cropped
-      subtitle  y 250 .. 442     LONG_TEXT, 320 wide, 32px, 4 lines of 18 chars
+      subtitle  y 248 .. 408     LONG_TEXT, 320 wide, 32px Lekton, 4 lines of 20
 
   MEASURED, on a Pixel Watch 3, with a character ruler pushed through the
   subtitle complication — not calculated:
 
       * A 32px line occupies **48px** of height. Not 32, not 38: the runtime's
         line spacing is 1.5x and there is no attribute to change it.
-      * A 320-wide band fits **18 characters** per line. (280 fits 16; the
-        extra 40px is worth two characters a line and halves how often a cue
-        needs a second page — 13.3% of a real film's 1,581 cues down to 5.2%.)
+      * A 320-wide band fits **20 Lekton characters** per line, because Lekton's
+        advance is exactly 0.5 em and 32 x 0.5 x 20 = 320. The app wraps to 19
+        and pads to 20, so every line ends in a space — without that, a
+        full-width line would be concatenated onto the next with no separator
+        and this element, which deletes newlines, would fuse the two words
+        either side into one (F-045).
+      * `lineSpacing="1.2"` rather than the 1.5 default, which is what makes
+        four lines of 32px text fit under a full-size frame at all.
+      * `verticalAlign` is documented and **rejected by this runtime** — adding
+        it makes the face fail to load with "Something went wrong".
 
   Those two numbers decide the whole layout, and they are also the numbers
   `EpisodeRepository` paginates cues against — **change them together or the
@@ -237,15 +244,15 @@
             slotId="2"
             displayName="Trickplayer subtitle"
             supportedTypes="LONG_TEXT SHORT_TEXT EMPTY"
-            x="65" y="250" width="320" height="192"
+            x="65" y="248" width="320" height="192"
             alpha="255">
 
             <BoundingBox x="0" y="0" width="320" height="192" />
 
             <Complication type="LONG_TEXT">
                 <PartText x="0" y="0" width="320" height="192">
-                    <Text align="CENTER" maxLines="4" ellipsis="FALSE">
-                        <Font family="SYNC_TO_DEVICE" size="32" color="#FFFFFF">
+                    <Text align="START" maxLines="4" ellipsis="FALSE" lineSpacing="1.2">
+                        <Font family="lekton" size="32" color="#FFFFFF">
                             <Template><![CDATA[%s]]><Parameter expression="[COMPLICATION.TEXT]" /></Template>
                         </Font>
                     </Text>
@@ -254,8 +261,8 @@
 
             <Complication type="SHORT_TEXT">
                 <PartText x="0" y="0" width="320" height="192">
-                    <Text align="CENTER" maxLines="2" ellipsis="FALSE">
-                        <Font family="SYNC_TO_DEVICE" size="32" color="#FFFFFF">
+                    <Text align="START" maxLines="2" ellipsis="FALSE" lineSpacing="1.2">
+                        <Font family="lekton" size="32" color="#FFFFFF">
                             <Template><![CDATA[%s]]><Parameter expression="[COMPLICATION.TEXT]" /></Template>
                         </Font>
                     </Text>
