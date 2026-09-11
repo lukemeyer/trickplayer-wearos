@@ -458,7 +458,7 @@ class Settings(context: Context) {
          * per PAGE rather than per cue, so an entry written before that holds a
          * different number of cues than the cursor expects.
          */
-        const val SCENE_POLICY = "f001.f002.pad20d"
+        const val SCENE_POLICY = "f001.f002.pad20f"
 
         const val K_SERVER = "server"
         const val K_ROUTES = "routes"

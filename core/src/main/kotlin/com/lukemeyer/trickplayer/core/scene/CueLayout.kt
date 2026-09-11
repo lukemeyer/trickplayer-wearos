@@ -26,6 +26,13 @@ package com.lukemeyer.trickplayer.core.scene
 object CueLayout {
 
     /**
+     * How many U+00A0 make one monospace cell — see [paddedPagesOf]. A property
+     * of the font's coverage, not of the algorithm, but it belongs next to the
+     * code that emits them.
+     */
+    const val NBSP_PER_CELL = 2
+
+    /**
      * Greedy word-wrap to a character budget.
      *
      * Never splits a word **unless the word itself is longer than the line**,
@@ -148,16 +155,27 @@ object CueLayout {
          * wrapped one character narrower so the indent costs nothing.
          */
         indentedLines: Set<Int> = emptySet(),
+        /** How many cells of indent those lines get. */
+        indentCells: Int = 1,
     ): List<String> {
         val indented = { i: Int -> (i % maxLinesPerPage) in indentedLines }
         val lines = wrapKeepingBreaks(text) { i ->
-            if (indented(i)) wrapWidth - 1 else wrapWidth
+            if (indented(i)) wrapWidth - indentCells else wrapWidth
         }
         // U+00A0, not a plain space: the renderer breaks the line AT the
         // padding whitespace and trims what follows, so an ordinary leading
         // space is swallowed and the indent never appears. A no-break space is
         // not a break opportunity and survives to the start of the line.
-        return lines.mapIndexed { i, l -> if (indented(i)) "\u00A0$l" else l }
+        //
+        // **Two per cell, because it is not the same width as a cell.** Lekton
+        // contains U+0020 and nothing else space-like — U+00A0, U+2007, U+2002,
+        // U+2003 and U+3000 all map to glyph 0 — so the no-break space is drawn
+        // from a fallback face at roughly a quarter em against the monospace
+        // half em. Measured on hardware: two of them indent by exactly one
+        // cell. The wrap still reserves whole cells, so the arithmetic and the
+        // pixels agree.
+        val indent = "\u00A0".repeat(indentCells * NBSP_PER_CELL)
+        return lines.mapIndexed { i, l -> if (indented(i)) "$indent$l" else l }
             .let { paginate(it, maxLinesPerPage) }
             .map { page -> page.joinToString("") { it.padEnd(padWidth) }.trimEnd() }
             .filter { it.isNotBlank() }

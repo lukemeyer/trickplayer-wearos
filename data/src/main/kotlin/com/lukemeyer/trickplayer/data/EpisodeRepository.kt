@@ -222,8 +222,19 @@ class EpisodeRepository private constructor(
         // four lines. Against a real film's 1,581 cues that leaves 5.2% of them
         // needing a second page; at the old 280 width it was 13.3%.
         val cues = ep.cuesFor(r.scene)
-            .flatMap { CueLayout.paddedPagesOf(it, WRAP_CHARS, LINE_CHARS, LINES_PER_PAGE, INDENTED_LINES) }
-            .ifEmpty { listOf(fmtTime(ent.tsMs)) }
+            .flatMap { CueLayout.paddedPagesOf(
+                    it, WRAP_CHARS, LINE_CHARS, LINES_PER_PAGE, INDENTED_LINES, INDENT_CELLS,
+                )
+            }
+            .ifEmpty {
+                // A scene with no cues, while the subtitle filter is ON, is one
+                // the floor kept rather than one the user asked to see
+                // (F-009) — so say nothing. A timestamp there is noise in the
+                // one place reserved for dialogue, and it is not what the
+                // setting promised. With the filter off, silent scenes are
+                // wanted and the timestamp is the only thing there is to show.
+                if (config.skipSilent) emptyList() else listOf(fmtTime(ent.tsMs))
+            }
         Log.i(TAG, "scene $sceneIndex -> frame ${r.frameIndex} @${ent.tsMs / 1000}s, " +
             "${jpeg.size} B, ${cues.size} cues")
 
@@ -269,6 +280,9 @@ class EpisodeRepository private constructor(
          * indent clears it, and only that line pays for it.
          */
         private val INDENTED_LINES = setOf(LINES_PER_PAGE - 1)
+
+        /** Two cells. One clears the bezel; two also stops it looking clipped. */
+        private const val INDENT_CELLS = 2
 
         /** Null when no episode has been configured yet. */
         fun open(context: Context): EpisodeRepository? {
