@@ -6,7 +6,7 @@ plugins {
 // The Android half of the pipeline: everything that needs a Context. :core stays
 // clean of this so it can keep running headlessly under :tools.
 android {
-    namespace = "com.lukemeyer.bif.data"
+    namespace = "com.lukemeyer.trickplayer.data"
     compileSdk = 36
     defaultConfig { minSdk = 34 }
     compileOptions {

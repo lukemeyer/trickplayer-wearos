@@ -11,7 +11,7 @@ dependencies {
 
 kotlin { jvmToolchain(21) }
 
-application { mainClass.set("com.lukemeyer.bif.tools.PipelineKt") }
+application { mainClass.set("com.lukemeyer.trickplayer.tools.PipelineKt") }
 
 // Run from the repo root so local.properties (gitignored, holds the dev Plex
 // credentials) resolves the same way it does for the Android modules.
@@ -20,7 +20,7 @@ tasks.named<JavaExec>("run") { workingDir = rootDir }
 tasks.register<JavaExec>("runDiscover") {
     group = "application"
     description = "Exercise Plex sign-in, discovery and browsing against a real account"
-    mainClass.set("com.lukemeyer.bif.tools.DiscoverKt")
+    mainClass.set("com.lukemeyer.trickplayer.tools.DiscoverKt")
     classpath = sourceSets["main"].runtimeClasspath
     workingDir = rootDir
 }
@@ -28,7 +28,7 @@ tasks.register<JavaExec>("runDiscover") {
 tasks.register<JavaExec>("runJellyfin") {
     group = "application"
     description = "Exercise the Jellyfin provider end to end against a real server"
-    mainClass.set("com.lukemeyer.bif.tools.JellyfinPipelineKt")
+    mainClass.set("com.lukemeyer.trickplayer.tools.JellyfinPipelineKt")
     classpath = sourceSets["main"].runtimeClasspath
     workingDir = rootDir
 }
@@ -36,7 +36,7 @@ tasks.register<JavaExec>("runJellyfin") {
 tasks.register<JavaExec>("runSubs") {
     group = "application"
     description = "Investigate whether embedded subtitle streams can be fetched"
-    mainClass.set("com.lukemeyer.bif.tools.SubsKt")
+    mainClass.set("com.lukemeyer.trickplayer.tools.SubsKt")
     classpath = sourceSets["main"].runtimeClasspath
     workingDir = rootDir
 }

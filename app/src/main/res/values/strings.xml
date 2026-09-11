@@ -1,5 +1,5 @@
 <resources>
-    <string name="app_name">BIF Watchface</string>
-    <string name="complication_frame">BIF Frame</string>
-    <string name="complication_subtitle">BIF Subtitle</string>
+    <string name="app_name">Trickplayer</string>
+    <string name="complication_frame">Trickplayer Scene</string>
+    <string name="complication_subtitle">Trickplayer Subtitle</string>
 </resources>

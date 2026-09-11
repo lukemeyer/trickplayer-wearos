@@ -10,11 +10,11 @@ plugins {
 // decides and fetches, the other only draws. The channel is the complication API
 // instead of chunked AppMessage over BLE, which is a considerably better deal.
 android {
-    namespace = "com.lukemeyer.bif.watchface"
+    namespace = "com.lukemeyer.trickplayer.watchface"
     compileSdk = 36
 
     defaultConfig {
-        applicationId = "com.lukemeyer.bif.watchface"
+        applicationId = "com.lukemeyer.trickplayer.watchface"
         minSdk = 34          // Wear OS 5 == WFF version 2
         targetSdk = 36
         versionCode = 1

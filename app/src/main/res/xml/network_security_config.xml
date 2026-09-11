@@ -1,0 +1,25 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  Cleartext HTTP, because a self-hosted Jellyfin is `http://10.x.x.x:8096` and
+  there is no way around that.
+
+  Android has blocked cleartext by default since API 28, and rightly. The reason
+  this build has to opt back in is the same structural fact that bites the Pebble
+  config page (trickplayer-knowledge findings/F-042): **Plex issues real
+  certificates for LAN addresses** through `*.plex.direct`, and Jellyfin has no
+  equivalent. A home Jellyfin is plain http or it is a reverse proxy someone set
+  up themselves.
+
+  Scoped as tightly as the format allows, which is not very. `domain-config`
+  matches hostnames, not address ranges, so "private networks only" cannot be
+  expressed here — the address is typed by the user and could be anything. What
+  is expressed instead: HTTPS is still the default and still certificate-checked,
+  and nothing here weakens validation for the servers that do have certificates.
+-->
+<network-security-config>
+    <base-config cleartextTrafficPermitted="true">
+        <trust-anchors>
+            <certificates src="system" />
+        </trust-anchors>
+    </base-config>
+</network-security-config>

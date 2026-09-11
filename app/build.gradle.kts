@@ -5,11 +5,11 @@ plugins {
 }
 
 android {
-    namespace = "com.lukemeyer.bif.app"
+    namespace = "com.lukemeyer.trickplayer.app"
     compileSdk = 36
 
     defaultConfig {
-        applicationId = "com.lukemeyer.bif.app"
+        applicationId = "com.lukemeyer.trickplayer.app"
         minSdk = 34          // Wear OS 5
         targetSdk = 36
         versionCode = 1
