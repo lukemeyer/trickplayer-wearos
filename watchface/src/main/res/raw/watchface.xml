@@ -11,19 +11,20 @@
 
       clock     y   6 ..  50     digital, hh:mm — no seconds shown
       frame     y  54 .. 246     PHOTO_IMAGE, 341x192 — 16:9, top corners cropped
-      subtitle  y 250 .. 442     LONG_TEXT, 280 wide, 32px, 4 lines of 16 chars
+      subtitle  y 250 .. 442     LONG_TEXT, 320 wide, 32px, 4 lines of 18 chars
 
   MEASURED, on a Pixel Watch 3, with a character ruler pushed through the
   subtitle complication — not calculated:
 
       * A 32px line occupies **48px** of height. Not 32, not 38: the runtime's
         line spacing is 1.5x and there is no attribute to change it.
-      * A 280-wide band fits **16 characters** per line.
+      * A 320-wide band fits **18 characters** per line. (280 fits 16; the
+        extra 40px is worth two characters a line and halves how often a cue
+        needs a second page — 13.3% of a real film's 1,581 cues down to 5.2%.)
 
-  Those two numbers decide the whole layout, and the second one decides it more
-  than anything else here, because band width is capped by the circle: the chord
-  at y=396 is 292, so 280 is already within a few pixels of the widest a band
-  ending there can be.
+  Those two numbers decide the whole layout, and they are also the numbers
+  `EpisodeRepository` paginates cues against — **change them together or the
+  pages will not match the band.**
 
       y=  6   103        y=240   449
       y= 20   185        y=380   326
@@ -39,8 +40,10 @@
       the frame     loses about 26px off each TOP corner. It is letterboxed
                     content whose corners are usually dark, so this is the
                     cheapest 26px on the face.
-      the subtitle  loses the outer ends of LINE FOUR, and only line four —
-                    lines one to three sit where the chord is 330 or wider.
+      the subtitle  can lose the outer ends of LINE FOUR, and only line four —
+                    lines one to three sit where the chord is 330 or wider. At
+                    320 wide a 17-character fourth line was measured rendering
+                    in full, so in practice even that rarely bites.
 
   That trade is deliberate and it is the right way round, because **four lines
   are rare**. The common cue is one to three lines, which sit entirely in the
@@ -60,12 +63,20 @@
   The picture was cut once to pay for that — 400x225 became 341x192 — and it has
   not been cut since; the fourth line was bought from the bezel instead.
 
-  ELLIPSIS
-  ========
-  `ellipsis="FALSE"`, deliberately. A truncated line costs three characters to
-  say "there was more", which the reader can already see. Without it the fourth
-  line runs its full width and a fifth is simply not shown — the same amount of
-  missing text, three more characters of it readable.
+  ELLIPSIS AND OVERFLOW
+  =====================
+  `ellipsis="FALSE"`, deliberately — but the real answer to overflow is not
+  here. **Nothing reaching this element should ever be too big for it**, because
+  `EpisodeRepository` has already wrapped and paginated every cue to 18x4
+  (F-002): a cue that needs six lines arrives as two pages, and the cursor steps
+  through them exactly as it steps through cues. The ellipsis is off because
+  after that it would only ever fire on a mis-measurement, and when it does,
+  three more readable characters beat three dots.
+
+  **This element deletes newlines.** Measured: "aaa bbb\nccc ddd" renders as
+  "aaa bbbccc ddd" — the break is removed and the words either side are joined
+  into one. Every cue therefore arrives with its lines already joined by spaces.
+  Do not pass raw SRT text to it.
 
   AMBIENT
   =======
@@ -220,13 +231,13 @@
             slotId="2"
             displayName="Trickplayer subtitle"
             supportedTypes="LONG_TEXT SHORT_TEXT EMPTY"
-            x="85" y="250" width="280" height="192"
+            x="65" y="250" width="320" height="192"
             alpha="255">
 
-            <BoundingBox x="0" y="0" width="280" height="192" />
+            <BoundingBox x="0" y="0" width="320" height="192" />
 
             <Complication type="LONG_TEXT">
-                <PartText x="0" y="0" width="280" height="192">
+                <PartText x="0" y="0" width="320" height="192">
                     <Text align="CENTER" maxLines="4" ellipsis="FALSE">
                         <Font family="SYNC_TO_DEVICE" size="32" color="#FFFFFF">
                             <Template><![CDATA[%s]]><Parameter expression="[COMPLICATION.TEXT]" /></Template>
@@ -236,7 +247,7 @@
             </Complication>
 
             <Complication type="SHORT_TEXT">
-                <PartText x="0" y="0" width="280" height="192">
+                <PartText x="0" y="0" width="320" height="192">
                     <Text align="CENTER" maxLines="2" ellipsis="FALSE">
                         <Font family="SYNC_TO_DEVICE" size="32" color="#FFFFFF">
                             <Template><![CDATA[%s]]><Parameter expression="[COMPLICATION.TEXT]" /></Template>

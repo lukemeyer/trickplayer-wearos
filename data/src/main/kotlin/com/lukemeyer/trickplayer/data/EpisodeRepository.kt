@@ -4,6 +4,7 @@ import android.content.Context
 import android.util.Log
 import com.lukemeyer.trickplayer.core.jellyfin.JellyfinClient
 import com.lukemeyer.trickplayer.core.plex.PlexClient
+import com.lukemeyer.trickplayer.core.scene.CueLayout
 import com.lukemeyer.trickplayer.core.scene.Episode
 import com.lukemeyer.trickplayer.core.scene.SceneResolver
 import com.lukemeyer.trickplayer.core.source.JellyfinSource
@@ -213,7 +214,16 @@ class EpisodeRepository private constructor(
             sourceFor(uri).frameBytes(playable, ent)
         } ?: return null
 
-        val cues = ep.cuesFor(r.scene).ifEmpty { listOf(fmtTime(ent.tsMs)) }
+        // A cue too long for the face becomes several cues, one per page, and
+        // the cursor then pages through them exactly as it steps through cues —
+        // no fetch, no new concept, and nothing is truncated (F-002).
+        //
+        // Measured on this screen: the 320-wide band fits 18 characters and
+        // four lines. Against a real film's 1,581 cues that leaves 5.2% of them
+        // needing a second page; at the old 280 width it was 13.3%.
+        val cues = ep.cuesFor(r.scene)
+            .flatMap { CueLayout.pagesOf(it, CHARS_PER_LINE, LINES_PER_PAGE) }
+            .ifEmpty { listOf(fmtTime(ent.tsMs)) }
         Log.i(TAG, "scene $sceneIndex -> frame ${r.frameIndex} @${ent.tsMs / 1000}s, " +
             "${jpeg.size} B, ${cues.size} cues")
 
@@ -231,6 +241,18 @@ class EpisodeRepository private constructor(
 
     companion object {
         private const val TAG = "TpRepo"
+
+        /**
+         * What the watch face can actually show, measured on a Pixel Watch 3
+         * with a character ruler — not calculated. `watchface.xml` carries the
+         * geometry these come from; change them together or the pages will not
+         * match the band.
+         *
+         * These are deliberately NOT in `:core`: they are a measurement of one
+         * screen, and F-002 is the algorithm, not the numbers.
+         */
+        private const val CHARS_PER_LINE = 18
+        private const val LINES_PER_PAGE = 4
 
         /** Null when no episode has been configured yet. */
         fun open(context: Context): EpisodeRepository? {

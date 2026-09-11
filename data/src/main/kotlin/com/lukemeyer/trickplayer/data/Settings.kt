@@ -453,8 +453,12 @@ class Settings(context: Context) {
          * removed the interval entirely: scene N now resolves to a different
          * frame than it did, so every pre-existing entry is wrong. Bumping
          * this is what makes that safe.
+         *
+         * Bumped again for F-002: a cached scene's cue list is now one entry
+         * per PAGE rather than per cue, so an entry written before that holds a
+         * different number of cues than the cursor expects.
          */
-        const val SCENE_POLICY = "f001"
+        const val SCENE_POLICY = "f001.f002"
 
         const val K_SERVER = "server"
         const val K_ROUTES = "routes"

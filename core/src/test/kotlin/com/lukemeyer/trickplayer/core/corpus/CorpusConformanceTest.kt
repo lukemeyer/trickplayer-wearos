@@ -1,6 +1,7 @@
 package com.lukemeyer.trickplayer.core.corpus
 
 import com.lukemeyer.trickplayer.core.subs.Srt
+import com.lukemeyer.trickplayer.core.scene.CueLayout
 import com.lukemeyer.trickplayer.core.scene.Episode
 import com.lukemeyer.trickplayer.core.source.FrameLocator
 import com.lukemeyer.trickplayer.core.jellyfin.JellyfinClient
@@ -509,12 +510,35 @@ class CorpusConformanceTest {
     // ---------------------------------------------------------------- cues
 
     @Test
-    @DisplayName("cues: NOT YET APPLICABLE — no wrap/paginate implementation")
+    @DisplayName("cues: wrap and paginate, losing no word (F-002)")
     fun cueLayout() {
-        assumeTrue(
-            false,
-            "F-002 is not implemented here — the watch face relies on WFF " +
-                "LONG_TEXT wrapping and ellipsises rather than paginating.",
-        )
+        val cases = obj("cues/layout.cases.json")["cases"]!!.jsonArray
+        for (e in cases) {
+            val c = e.jsonObject
+            val name = c["name"]!!.jsonPrimitive.content
+            val lines = CueLayout.wrap(
+                c["text"]!!.jsonPrimitive.content,
+                c["maxCharsPerLine"]!!.jsonPrimitive.int,
+            )
+            assertEquals(
+                c["expectLines"]!!.jsonArray.map { it.jsonPrimitive.content },
+                lines,
+                "$name: wrapped lines",
+            )
+            val pages = CueLayout.paginate(lines, c["maxLinesPerPage"]!!.jsonPrimitive.int)
+            assertEquals(
+                c["expectPages"]!!.jsonArray.map { p ->
+                    p.jsonArray.map { it.jsonPrimitive.content }
+                },
+                pages,
+                "$name: pages",
+            )
+            // The property the whole finding is about: every word survives.
+            assertEquals(
+                c["text"]!!.jsonPrimitive.content.replace(Regex("\\s+"), ""),
+                pages.flatten().joinToString("").replace(" ", ""),
+                "$name: no character may be lost",
+            )
+        }
     }
 }
